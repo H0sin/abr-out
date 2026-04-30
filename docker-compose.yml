@@ -55,6 +55,15 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   api:
     build: .
     restart: unless-stopped
@@ -65,6 +74,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     expose:
       - "8000"
 
@@ -78,6 +89,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       api:
         condition: service_started
 
@@ -91,6 +104,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   caddy:
     image: caddy:2-alpine

@@ -6,6 +6,11 @@ name: abr-out
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 services:
+  migrate:
+    image: ${IMAGE:-ghcr.io/h0sin/abr-out:latest}
+    build: !reset null
+    pull_policy: always
+
   api:
     image: ${IMAGE:-ghcr.io/h0sin/abr-out:latest}
     build: !reset null
