@@ -56,7 +56,8 @@ services:
       retries: 5
 
   migrate:
-    build: .
+    image: ${IMAGE:-ghcr.io/h0sin/abr-out:latest}
+    pull_policy: always
     command: ["alembic", "upgrade", "head"]
     environment: *app-env
     depends_on:
@@ -65,7 +66,8 @@ services:
     restart: "no"
 
   api:
-    build: .
+    image: ${IMAGE:-ghcr.io/h0sin/abr-out:latest}
+    pull_policy: always
     restart: unless-stopped
     command: ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment: *app-env
@@ -80,7 +82,8 @@ services:
       - "8000"
 
   bot:
-    build: .
+    image: ${IMAGE:-ghcr.io/h0sin/abr-out:latest}
+    pull_policy: always
     restart: unless-stopped
     command: ["python", "-m", "app.bot.main"]
     environment: *app-env
@@ -95,7 +98,8 @@ services:
         condition: service_started
 
   worker:
-    build: .
+    image: ${IMAGE:-ghcr.io/h0sin/abr-out:latest}
+    pull_policy: always
     restart: unless-stopped
     command: ["python", "-m", "app.worker.main"]
     environment: *app-env
