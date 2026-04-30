@@ -1,32 +1,49 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ApiError, Listing, api } from "../api";
+import { EmptyState, SkeletonCard, StatusBadge } from "../components/ui";
+import { useResource } from "../lib/useApi";
+import { useToast } from "../lib/toast";
+import { haptic, useMainButton } from "../lib/useTelegram";
+
+const HOST_RE =
+  /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|[01]?\d?\d)){3}|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,})$/i;
+
+type Errors = Partial<Record<"title" | "host" | "port" | "price", string>>;
 
 export function Sell() {
-  const [mine, setMine] = useState<Listing[] | null>(null);
+  const { data: mine, loading, error, refetch } = useResource(
+    () => api.listMyListings(),
+  );
   const [title, setTitle] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState("");
   const [price, setPrice] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
-  async function load() {
-    try {
-      setMine(await api.listMyListings());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "خطا");
-    }
-  }
+  const errors = useMemo<Errors>(() => {
+    const e: Errors = {};
+    if (!title.trim()) e.title = "عنوان الزامی است";
+    else if (title.length > 100) e.title = "حداکثر ۱۰۰ کاراکتر";
+    if (!host.trim()) e.host = "هاست/IP الزامی است";
+    else if (!HOST_RE.test(host.trim())) e.host = "آدرس معتبر وارد کنید";
+    const p = parseInt(port, 10);
+    if (!port) e.port = "پورت الزامی است";
+    else if (!Number.isFinite(p) || p < 1 || p > 65535)
+      e.port = "بین ۱ تا ۶۵۵۳۵";
+    const pr = parseFloat(price);
+    if (!price) e.price = "قیمت الزامی است";
+    else if (!Number.isFinite(pr) || pr <= 0) e.price = "بزرگ‌تر از صفر";
+    return e;
+  }, [title, host, port, price]);
 
-  useEffect(() => {
-    load();
-  }, []);
+  const valid = Object.keys(errors).length === 0;
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setSuccess(null);
+  async function submit(e?: FormEvent) {
+    e?.preventDefault();
+    setTouched({ title: true, host: true, port: true, price: true });
+    if (!valid || busy) return;
     setBusy(true);
     try {
       await api.createListing({
@@ -35,103 +52,178 @@ export function Sell() {
         port: parseInt(port, 10),
         price_per_gb_usd: parseFloat(price),
       });
-      setSuccess("درخواست شما ثبت شد. پس از تأیید ادمین فعال می‌شود.");
+      haptic.success();
+      toast.success("ثبت شد. پس از تأیید ادمین فعال می‌شود.");
       setTitle("");
       setHost("");
       setPort("");
       setPrice("");
-      window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred("success");
-      load();
-    } catch (e) {
-      const msg = e instanceof ApiError ? e.message : "خطا در ثبت";
-      setError(msg);
-      window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred("error");
+      setTouched({});
+      refetch();
+    } catch (err) {
+      haptic.error();
+      toast.error(err instanceof ApiError ? err.message : "خطا در ثبت");
     } finally {
       setBusy(false);
     }
   }
 
+  // Drive submit through Telegram MainButton for native feel.
+  useMainButton({
+    text: busy ? "در حال ارسال..." : "ثبت outbound",
+    onClick: () => submit(),
+    loading: busy,
+    disabled: !valid || busy,
+  });
+
+  // Hide MainButton if user navigates away mid-flight (covered by hook cleanup).
+  useEffect(() => () => undefined, []);
+
   return (
     <div>
       <h2>فروش outbound</h2>
-      <p className="muted">
-        outbound ایران خود را اضافه کنید. پس از تأیید ادمین در مارکت قابل خرید است.
+      <p className="muted" style={{ marginTop: 4 }}>
+        outbound ایران خود را اضافه کنید. پس از تأیید ادمین در مارکت قابل خرید
+        است.
       </p>
 
-      {error && <div className="error">{error}</div>}
-      {success && <div className="success">{success}</div>}
-
-      <form onSubmit={submit} className="card">
-        <div className="field">
-          <label>عنوان</label>
+      <form onSubmit={submit} className="card mt-3" noValidate>
+        <Field
+          label="عنوان"
+          error={touched.title ? errors.title : undefined}
+        >
           <input
+            className={"input" + (touched.title && errors.title ? " invalid" : "")}
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            required
+            onBlur={() => setTouched((t) => ({ ...t, title: true }))}
             maxLength={100}
             placeholder="مثلاً: تهران - مخابرات"
           />
-        </div>
-        <div className="field">
-          <label>هاست/IP ایران</label>
+        </Field>
+
+        <Field label="هاست/IP ایران" error={touched.host ? errors.host : undefined}>
           <input
+            className={"input" + (touched.host && errors.host ? " invalid" : "")}
             type="text"
+            inputMode="url"
+            dir="ltr"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
             value={host}
             onChange={(e) => setHost(e.target.value)}
-            required
+            onBlur={() => setTouched((t) => ({ ...t, host: true }))}
             placeholder="1.2.3.4 یا host.ir"
           />
+        </Field>
+
+        <div className="row gap-3" style={{ alignItems: "flex-start" }}>
+          <Field
+            label="پورت"
+            error={touched.port ? errors.port : undefined}
+            className="flex-1"
+          >
+            <input
+              className={"input" + (touched.port && errors.port ? " invalid" : "")}
+              type="text"
+              inputMode="numeric"
+              dir="ltr"
+              pattern="[0-9]*"
+              value={port}
+              onChange={(e) => setPort(e.target.value.replace(/\D/g, ""))}
+              onBlur={() => setTouched((t) => ({ ...t, port: true }))}
+              placeholder="443"
+            />
+          </Field>
+          <Field
+            label="قیمت هر GB ($)"
+            error={touched.price ? errors.price : undefined}
+            className="flex-1"
+          >
+            <input
+              className={"input" + (touched.price && errors.price ? " invalid" : "")}
+              type="text"
+              inputMode="decimal"
+              dir="ltr"
+              value={price}
+              onChange={(e) =>
+                setPrice(e.target.value.replace(/[^\d.]/g, ""))
+              }
+              onBlur={() => setTouched((t) => ({ ...t, price: true }))}
+              placeholder="0.50"
+            />
+          </Field>
         </div>
-        <div className="field">
-          <label>پورت</label>
-          <input
-            type="number"
-            value={port}
-            onChange={(e) => setPort(e.target.value)}
-            required
-            min={1}
-            max={65535}
-          />
-        </div>
-        <div className="field">
-          <label>قیمت هر GB (USD)</label>
-          <input
-            type="number"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            required
-            min={0.01}
-            step={0.01}
-            placeholder="مثلاً 0.5"
-          />
-        </div>
-        <button className="btn" disabled={busy}>
-          {busy ? "در حال ارسال..." : "ثبت"}
+
+        <button
+          type="submit"
+          className="btn btn-primary mt-2"
+          disabled={!valid || busy}
+        >
+          {busy ? (
+            <>
+              <span className="spinner" /> در حال ارسال...
+            </>
+          ) : (
+            "ثبت outbound"
+          )}
         </button>
       </form>
 
-      <h3 style={{ marginTop: 24 }}>outboundهای من</h3>
-      {mine === null && <p className="muted">در حال بارگذاری...</p>}
-      {mine && mine.length === 0 && (
-        <p className="muted center">هنوز outbound‌ای ثبت نکرده‌اید.</p>
+      <h3 className="mt-6">outboundهای من</h3>
+      {error && <div className="alert alert-error mt-2">{error}</div>}
+      {loading && !mine && (
+        <>
+          <SkeletonCard />
+          <SkeletonCard />
+        </>
       )}
-      {mine?.map((l) => (
-        <div key={l.id} className="card">
-          <div className="row">
-            <div>
-              <strong>{l.title}</strong>
-              <div className="muted">
-                {l.iran_host}:{l.port} • {l.price_per_gb_usd}$/GB
+      {mine && mine.length === 0 && (
+        <EmptyState emoji="🏷" title="هنوز outboundی ثبت نکرده‌اید" />
+      )}
+      {mine?.map((l: Listing) => (
+        <article key={l.id} className="card">
+          <div className="row" style={{ alignItems: "flex-start" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="title">{l.title}</div>
+              <div
+                className="muted"
+                style={{ direction: "ltr", textAlign: "right", marginTop: 2 }}
+              >
+                {l.iran_host}:{l.port}
+                <span style={{ margin: "0 6px" }}>•</span>
+                {l.price_per_gb_usd}$/GB
               </div>
             </div>
-            <span className={`badge badge-${l.status}`}>{l.status}</span>
+            <StatusBadge status={l.status} />
           </div>
-          <div className="muted" style={{ marginTop: 6 }}>
-            فروش: {l.sales_count}
+          <div className="muted mt-2">
+            فروش: <span className="num">{l.sales_count}</span>
           </div>
-        </div>
+        </article>
       ))}
+    </div>
+  );
+}
+
+function Field({
+  label,
+  error,
+  className,
+  children,
+}: {
+  label: string;
+  error?: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={"field " + (className ?? "")}>
+      <label className="field-label">{label}</label>
+      {children}
+      {error && <div className="field-error">{error}</div>}
     </div>
   );
 }

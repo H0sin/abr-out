@@ -6,53 +6,89 @@ import { Browse } from "./pages/Browse";
 import { MyConfigs } from "./pages/MyConfigs";
 import { Sell } from "./pages/Sell";
 import { Wallet } from "./pages/Wallet";
+import { ToastProvider } from "./lib/toast";
+import { MeProvider } from "./lib/MeContext";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./styles.css";
 
-window.Telegram?.WebApp?.ready();
-window.Telegram?.WebApp?.expand();
+const tg = window.Telegram?.WebApp;
+tg?.ready();
+tg?.expand();
 
 // Telegram appends "#tgWebAppData=...&tgWebAppVersion=..." to the URL.
 // HashRouter would treat that whole blob as a route and fail to match.
-// Strip the Telegram hash so HashRouter starts fresh at "#/".
-if (window.location.hash.startsWith("#tgWebApp")) {
-  history.replaceState(null, "", window.location.pathname + window.location.search);
+if (
+  window.location.hash.startsWith("#tgWebApp") ||
+  window.location.search.includes("tgWebAppStartParam")
+) {
+  history.replaceState(null, "", window.location.pathname);
 }
 
-// Mobile debug overlay: surface uncaught errors on screen since we can't
-// open DevTools inside the Telegram mobile webview.
-function showError(label: string, message: string) {
-  const id = "__err_overlay__";
-  let el = document.getElementById(id);
-  if (!el) {
-    el = document.createElement("div");
-    el.id = id;
-    el.style.cssText =
-      "position:fixed;left:0;right:0;bottom:0;max-height:50vh;overflow:auto;" +
-      "background:#b00020;color:#fff;font:12px/1.4 monospace;padding:8px;" +
-      "z-index:99999;white-space:pre-wrap;direction:ltr;";
-    document.body.appendChild(el);
+// Apply the Telegram theme to <meta theme-color> + html background and
+// re-apply whenever the user flips light/dark in Telegram settings.
+function applyTheme() {
+  const t = window.Telegram?.WebApp;
+  if (!t) return;
+  const bg =
+    t.themeParams?.secondary_bg_color ||
+    t.themeParams?.bg_color ||
+    (t.colorScheme === "dark" ? "#0b1220" : "#f5f6fa");
+  document.documentElement.dataset.scheme = t.colorScheme;
+  document
+    .querySelector('meta[name="theme-color"]')
+    ?.setAttribute("content", bg);
+  try {
+    t.setHeaderColor("secondary_bg_color");
+    t.setBackgroundColor("secondary_bg_color");
+  } catch {
+    /* older clients */
   }
-  el.textContent += `[${label}] ${message}\n`;
 }
-window.addEventListener("error", (e) => {
-  showError("error", `${e.message} @ ${e.filename}:${e.lineno}`);
-});
-window.addEventListener("unhandledrejection", (e) => {
-  showError("promise", String(e.reason?.stack || e.reason));
-});
+applyTheme();
+tg?.onEvent("themeChanged", applyTheme);
+
+// Dev-only error overlay (kept off in production builds).
+if (import.meta.env.DEV) {
+  const showError = (label: string, message: string) => {
+    const id = "__err_overlay__";
+    let el = document.getElementById(id);
+    if (!el) {
+      el = document.createElement("div");
+      el.id = id;
+      el.style.cssText =
+        "position:fixed;left:0;right:0;bottom:0;max-height:50vh;overflow:auto;" +
+        "background:#b00020;color:#fff;font:12px/1.4 monospace;padding:8px;" +
+        "z-index:99999;white-space:pre-wrap;direction:ltr;";
+      document.body.appendChild(el);
+    }
+    el.textContent += `[${label}] ${message}\n`;
+  };
+  window.addEventListener("error", (e) =>
+    showError("error", `${e.message} @ ${e.filename}:${e.lineno}`),
+  );
+  window.addEventListener("unhandledrejection", (e) =>
+    showError("promise", String(e.reason?.stack || e.reason)),
+  );
+}
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <HashRouter>
-      <Routes>
-        <Route path="/" element={<App />}>
-          <Route index element={<Navigate to="/browse" replace />} />
-          <Route path="browse" element={<Browse />} />
-          <Route path="my" element={<MyConfigs />} />
-          <Route path="sell" element={<Sell />} />
-          <Route path="wallet" element={<Wallet />} />
-        </Route>
-      </Routes>
-    </HashRouter>
+    <ErrorBoundary>
+      <ToastProvider>
+        <MeProvider>
+          <HashRouter>
+            <Routes>
+              <Route path="/" element={<App />}>
+                <Route index element={<Navigate to="/browse" replace />} />
+                <Route path="browse" element={<Browse />} />
+                <Route path="my" element={<MyConfigs />} />
+                <Route path="sell" element={<Sell />} />
+                <Route path="wallet" element={<Wallet />} />
+              </Route>
+            </Routes>
+          </HashRouter>
+        </MeProvider>
+      </ToastProvider>
+    </ErrorBoundary>
   </React.StrictMode>,
 );

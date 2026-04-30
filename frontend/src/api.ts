@@ -1,12 +1,37 @@
 // Tiny API client. All requests authenticate via the Telegram Mini App
 // initData passed in the Authorization header as "tma <initData>".
 
-const initData = window.Telegram?.WebApp?.initData ?? "";
+function getInitData(): string {
+  return window.Telegram?.WebApp?.initData ?? "";
+}
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
     super(message);
   }
+}
+
+function parseDetail(raw: unknown, fallback: string): string {
+  if (!raw) return fallback;
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(raw)) {
+    // FastAPI validation errors: [{loc, msg, type}, ...]
+    return (
+      raw
+        .map((it: any) => (typeof it === "string" ? it : it?.msg ?? ""))
+        .filter(Boolean)
+        .join("؛ ") || fallback
+    );
+  }
+  if (typeof raw === "object") {
+    const o = raw as Record<string, unknown>;
+    if (typeof o.msg === "string") return o.msg;
+    if (typeof o.detail === "string") return o.detail;
+  }
+  return fallback;
 }
 
 async function request<T>(
@@ -14,19 +39,24 @@ async function request<T>(
   options: RequestInit = {},
 ): Promise<T> {
   const headers = new Headers(options.headers);
-  headers.set("Authorization", `tma ${initData}`);
+  headers.set("Authorization", `tma ${getInitData()}`);
   if (options.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 
-  const r = await fetch(path, { ...options, headers });
+  let r: Response;
+  try {
+    r = await fetch(path, { ...options, headers });
+  } catch {
+    throw new ApiError(0, "اتصال به سرور برقرار نشد");
+  }
   if (!r.ok) {
-    let detail = r.statusText;
+    let detail: string = r.statusText || "خطا";
     try {
       const body = await r.json();
-      detail = body.detail ?? detail;
+      detail = parseDetail(body?.detail ?? body, detail);
     } catch {
-      /* ignore */
+      /* ignore non-json bodies */
     }
     throw new ApiError(r.status, detail);
   }
@@ -62,7 +92,6 @@ export type Config = {
   status: string;
   last_traffic_bytes: number;
 };
-
 
 export const api = {
   me: () => request<Me>("/api/me"),
