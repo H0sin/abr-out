@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import admin, configs, listings, me, prober, webhook
@@ -42,4 +43,8 @@ async def health() -> dict[str, str]:
 # The frontend is built into /app/static during the Docker image build.
 _static_dir = Path(os.environ.get("STATIC_DIR", "/app/static"))
 if _static_dir.is_dir():
+    @app.get("/app", include_in_schema=False)
+    async def _app_redirect() -> RedirectResponse:
+        return RedirectResponse(url="/app/")
+
     app.mount("/app", StaticFiles(directory=str(_static_dir), html=True), name="webapp")
