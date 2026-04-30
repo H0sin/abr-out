@@ -28,7 +28,7 @@ class ListingOut(BaseModel):
 class ListingCreateIn(BaseModel):
     title: str = Field(min_length=2, max_length=128)
     iran_host: str = Field(min_length=3, max_length=255)
-    port: int = Field(ge=1024, le=65535)
+    port: int = Field(ge=1, le=65535)
     price_per_gb_usd: Decimal = Field(gt=0)
 
 
