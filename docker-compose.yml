@@ -1,0 +1,93 @@
+name: abr-out
+
+x-app-env: &app-env
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  POSTGRES_DB: ${POSTGRES_DB}
+  POSTGRES_HOST: ${POSTGRES_HOST}
+  POSTGRES_PORT: ${POSTGRES_PORT}
+  REDIS_HOST: ${REDIS_HOST}
+  REDIS_PORT: ${REDIS_PORT}
+  BOT_TOKEN: ${BOT_TOKEN}
+  XUI_BASE_URL: ${XUI_BASE_URL}
+  XUI_USERNAME: ${XUI_USERNAME}
+  XUI_PASSWORD: ${XUI_PASSWORD}
+  XUI_PANEL_HOST_PUBLIC: ${XUI_PANEL_HOST_PUBLIC}
+  API_HOST: ${API_HOST}
+  API_PORT: ${API_PORT}
+  API_INTERNAL_TOKEN: ${API_INTERNAL_TOKEN}
+  ADMIN_TELEGRAM_IDS: ${ADMIN_TELEGRAM_IDS}
+  COMMISSION_PCT: ${COMMISSION_PCT}
+  MIN_TOPUP_USD: ${MIN_TOPUP_USD}
+  TRAFFIC_POLL_INTERVAL_SEC: ${TRAFFIC_POLL_INTERVAL_SEC}
+  NOWPAYMENTS_API_KEY: ${NOWPAYMENTS_API_KEY}
+  NOWPAYMENTS_IPN_SECRET: ${NOWPAYMENTS_IPN_SECRET}
+  LOG_LEVEL: ${LOG_LEVEL}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    restart: unless-stopped
+    command: ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  bot:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "app.bot.main"]
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker.main"]
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pg_data:
+  redis_data:

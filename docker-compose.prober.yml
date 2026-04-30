@@ -1,0 +1,16 @@
+name: abr-out-prober
+
+# Run on the Iran-side server. Requires an .env with API_BASE and API_INTERNAL_TOKEN.
+
+services:
+  prober:
+    build:
+      context: .
+      dockerfile: prober/Dockerfile
+    image: ${IMAGE:-ghcr.io/h0sin/abr-out-prober:latest}
+    restart: unless-stopped
+    environment:
+      API_BASE: ${API_BASE:-https://api.example.com}
+      API_INTERNAL_TOKEN: ${API_INTERNAL_TOKEN}
+      PROBE_INTERVAL_SEC: ${PROBE_INTERVAL_SEC:-60}
+      PROBE_TIMEOUT_SEC: ${PROBE_TIMEOUT_SEC:-3}
