@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision = "0001_admin_features"
 down_revision = "0000_baseline"
@@ -54,8 +55,12 @@ def upgrade() -> None:
     )
 
     # support_messages
-    support_direction = sa.Enum("in", "out", name="support_direction")
-    support_direction.create(op.get_bind(), checkfirst=True)
+    support_direction = postgresql.ENUM(
+        "in", "out", name="support_direction", create_type=False
+    )
+    sa.Enum("in", "out", name="support_direction").create(
+        op.get_bind(), checkfirst=True
+    )
     op.create_table(
         "support_messages",
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
@@ -94,10 +99,17 @@ def upgrade() -> None:
     )
 
     # broadcasts
-    broadcast_status = sa.Enum(
-        "queued", "running", "done", "failed", name="broadcast_status"
+    broadcast_status = postgresql.ENUM(
+        "queued",
+        "running",
+        "done",
+        "failed",
+        name="broadcast_status",
+        create_type=False,
     )
-    broadcast_status.create(op.get_bind(), checkfirst=True)
+    sa.Enum(
+        "queued", "running", "done", "failed", name="broadcast_status"
+    ).create(op.get_bind(), checkfirst=True)
     op.create_table(
         "broadcasts",
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
