@@ -1,4 +1,5 @@
 // Typings for the subset of window.Telegram.WebApp we use.
+/// <reference types="vite/client" />
 export {};
 
 declare global {
