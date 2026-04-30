@@ -59,11 +59,19 @@ class TxnType(str, enum.Enum):
 class PaymentGateway(str, enum.Enum):
     manual = "manual"
     nowpayments = "nowpayments"
+    swapwallet = "swapwallet"
 
 
 class PaymentStatus(str, enum.Enum):
     pending = "pending"
     confirmed = "confirmed"
+    failed = "failed"
+
+
+class SwapWalletTxStatus(str, enum.Enum):
+    pending = "pending"
+    paid = "paid"
+    cancelled = "cancelled"
     failed = "failed"
 
 
@@ -245,6 +253,33 @@ class PingSample(Base):
 
     __table_args__ = (
         Index("ix_ping_samples_listing_time", "listing_id", "sampled_at"),
+    )
+
+
+class SwapWalletTx(Base):
+    """Tracks every SwapWallet top-up request from creation to settlement."""
+
+    __tablename__ = "swapwallet_transactions"
+
+    order_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.telegram_id", ondelete="CASCADE"), nullable=False
+    )
+    amount_usd: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
+    amount_irt: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    invoice_id: Mapped[str | None] = mapped_column(String(128))
+    status: Mapped[SwapWalletTxStatus] = mapped_column(
+        Enum(SwapWalletTxStatus, name="swapwallet_tx_status"),
+        default=SwapWalletTxStatus.pending,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_swapwallet_tx_user", "user_id"),
+        Index("ix_swapwallet_tx_created_at", "created_at"),
     )
 
 

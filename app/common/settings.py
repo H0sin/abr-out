@@ -45,6 +45,18 @@ class Settings(BaseSettings):
     nowpayments_api_key: str = ""
     nowpayments_ipn_secret: str = ""
 
+    # SwapWallet
+    swapwallet_api_key: str = ""
+    # Optional fallback if SwapWallet rate API is unreachable (Toman per 1 USDT).
+    # 0 means no fallback → raise an error.
+    swapwallet_fallback_rate: int = 0
+
+    # Public URL settings.
+    # Set DOMAIN to your Cloudflare-fronted domain (e.g. example.com).
+    # webhook_base_url is auto-derived as https://{domain} unless overridden.
+    domain: str = ""
+    webhook_base_url: str = ""
+
     # Logging
     log_level: str = "INFO"
 
@@ -66,6 +78,15 @@ class Settings(BaseSettings):
     @property
     def redis_url(self) -> str:
         return f"redis://{self.redis_host}:{self.redis_port}/0"
+
+    @property
+    def public_base_url(self) -> str:
+        """Effective public URL: explicit webhook_base_url, else https://{domain}."""
+        if self.webhook_base_url:
+            return self.webhook_base_url.rstrip("/")
+        if self.domain:
+            return f"https://{self.domain.strip().lstrip('/').rstrip('/')}"
+        return ""
 
     @property
     def admin_ids(self) -> set[int]:

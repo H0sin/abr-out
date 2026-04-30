@@ -1,16 +1,51 @@
+# --- Python ---
 __pycache__/
 *.py[cod]
+*$py.class
 *.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# --- Virtual envs ---
 .venv/
+.venv-*/
 venv/
-.env
-.env.*
-!.env.example
-*.log
-.idea/
-.vscode/
+env/
+ENV/
+
+# --- Caches / tooling ---
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-dist/
-build/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.cache/
+
+# --- Editors / IDEs ---
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Env / secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Docker / Caddy local data ---
+caddy_data/
+caddy_config/
+
+# --- Local DB dumps ---
+*.sqlite3
+*.db
