@@ -25,6 +25,9 @@
 		reverse_proxy api:8000
 	}
 
+	# /app without trailing slash → redirect to /app/
+	redir /app /app/ 308
+
 	handle /api/* {
 		reverse_proxy api:8000
 	}
