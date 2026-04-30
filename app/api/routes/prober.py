@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,11 +48,12 @@ async def list_targets() -> list[ListingTarget]:
 @router.post(
     "/samples",
     status_code=204,
+    response_class=Response,
     dependencies=[Depends(require_internal_token)],
 )
-async def post_samples(samples: list[PingSampleIn]) -> None:
+async def post_samples(samples: list[PingSampleIn]) -> Response:
     if not samples:
-        return
+        return Response(status_code=204)
     async with SessionLocal() as session:
         session.add_all(
             [
@@ -68,3 +69,4 @@ async def post_samples(samples: list[PingSampleIn]) -> None:
             ]
         )
         await session.commit()
+    return Response(status_code=204)
