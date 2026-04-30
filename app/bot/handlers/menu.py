@@ -15,6 +15,7 @@ from app.bot.keyboards import (
     BTN_WALLET,
     admin_user_panel,
     main_menu,
+    open_app_inline,
     support_reply_kb,
 )
 from app.common.db.models import SupportDirection, SupportMessage, User
@@ -81,6 +82,13 @@ async def cmd_start(message: Message) -> None:
         "از منوی پایین یکی از گزینه‌ها رو انتخاب کن:",
         reply_markup=main_menu(),
     )
+
+    inline = open_app_inline()
+    if inline is not None:
+        await message.answer(
+            "برای ورود به مینی‌اپ روی دکمهٔ زیر بزن:",
+            reply_markup=inline,
+        )
 
     if is_first_start:
         await _notify_admins_new_user(user)

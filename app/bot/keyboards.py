@@ -17,15 +17,30 @@ BTN_SUPPORT = "📨 پشتیبانی"
 
 
 def main_menu() -> ReplyKeyboardMarkup:
-    rows: list[list[KeyboardButton]] = []
-    base = get_settings().public_base_url
-    if base:
-        rows.append(
-            [KeyboardButton(text=BTN_OPEN_APP, web_app=WebAppInfo(url=f"{base}/app/"))]
-        )
-    rows.append([KeyboardButton(text=BTN_WALLET), KeyboardButton(text=BTN_TOPUP)])
-    rows.append([KeyboardButton(text=BTN_SUPPORT)])
+    rows: list[list[KeyboardButton]] = [
+        [KeyboardButton(text=BTN_WALLET), KeyboardButton(text=BTN_TOPUP)],
+        [KeyboardButton(text=BTN_SUPPORT)],
+    ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def open_app_inline() -> InlineKeyboardMarkup | None:
+    """Inline button to open the Mini App. Inline WebApp buttons send initData
+    on all platforms (including Telegram Desktop), unlike reply-keyboard ones
+    which can sometimes be flaky on desktop clients."""
+    base = get_settings().public_base_url
+    if not base:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=BTN_OPEN_APP,
+                    web_app=WebAppInfo(url=f"{base}/app/"),
+                )
+            ]
+        ]
+    )
 
 
 def admin_user_panel(user_id: int, is_blocked: bool) -> InlineKeyboardMarkup:
