@@ -22,6 +22,25 @@ const tg = window.Telegram?.WebApp;
 tg?.ready();
 tg?.expand();
 
+// If Telegram did not provide initData, show a clear message instead of a
+// silent 401 from the API. This catches: opening the URL in a normal browser,
+// using a stale/cached page, or an old Telegram client that does not pass
+// initData to the WebApp.
+const hasInitData = Boolean(tg?.initData);
+if (!hasInitData) {
+  document.getElementById("root")!.innerHTML = `
+    <div style="padding:24px;font:14px/1.7 Vazirmatn,system-ui,sans-serif;
+                color:var(--tg-theme-text-color,#111);text-align:center;">
+      <h2 style="margin:0 0 12px">دسترسی فقط از طریق ربات</h2>
+      <p>این صفحه باید از داخل ربات تلگرام و با دکمهٔ «🚀 باز کردن مینی‌اپ» باز شود.</p>
+      <p style="opacity:.7;font-size:12px;margin-top:24px">
+        debug: tg=${tg ? "yes" : "no"}, initData=${tg?.initData?.length ?? 0} chars,
+        version=${tg?.version ?? "?"}, platform=${tg?.platform ?? "?"}
+      </p>
+    </div>`;
+  throw new Error("missing Telegram WebApp initData");
+}
+
 // Telegram appends "#tgWebAppData=...&tgWebAppVersion=..." to the URL.
 // HashRouter would treat that whole blob as a route and fail to match.
 if (
