@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from fastapi import Header, HTTPException, status
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from app.common.db.models import User
+from app.common.db.session import SessionLocal
 from app.common.settings import get_settings
+from app.common.telegram import verify_init_data
 
 
 async def require_internal_token(
@@ -13,3 +17,45 @@ async def require_internal_token(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid internal token"
         )
+
+
+async def current_user(
+    authorization: str | None = Header(default=None),
+) -> User:
+    """
+    Validate `Authorization: tma <initData>` from the Telegram Mini App and
+    return (upserting if needed) the corresponding User row.
+    """
+    if not authorization or not authorization.lower().startswith("tma "):
+        raise HTTPException(status_code=401, detail="missing tma auth")
+
+    init_data = authorization[4:].strip()
+    settings = get_settings()
+    if not settings.bot_token:
+        raise HTTPException(status_code=500, detail="bot not configured")
+
+    try:
+        payload = verify_init_data(init_data, settings.bot_token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=f"invalid initData: {e}") from e
+
+    tg_user = payload.get("user")
+    if not isinstance(tg_user, dict) or "id" not in tg_user:
+        raise HTTPException(status_code=401, detail="no user in initData")
+
+    telegram_id = int(tg_user["id"])
+    username = tg_user.get("username")
+
+    async with SessionLocal() as session:
+        stmt = (
+            pg_insert(User)
+            .values(telegram_id=telegram_id, username=username)
+            .on_conflict_do_update(
+                index_elements=["telegram_id"],
+                set_={"username": username},
+            )
+            .returning(User)
+        )
+        result = await session.execute(stmt)
+        await session.commit()
+        return result.scalar_one()

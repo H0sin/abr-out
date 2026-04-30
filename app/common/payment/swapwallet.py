@@ -87,6 +87,9 @@ async def create_swapwallet_payment(amount_usd: Decimal, chat_id: int) -> dict:
         "userTelegramId": chat_id,
     }
 
+    if not settings.swapwallet_api_key:
+        raise RuntimeError("SWAPWALLET_API_KEY is not configured")
+
     logger.info(
         "[SwapWallet] creating payment order={} amount_usd={} amount_irt={}",
         order_id, amount_usd, amount_irt,

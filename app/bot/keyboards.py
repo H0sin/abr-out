@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
 
-BTN_BUY = "🛒 خرید"
-BTN_SELL = "💰 فروش"
+from app.common.settings import settings
+
+BTN_OPEN_APP = "🚀 باز کردن مینی‌اپ"
 BTN_WALLET = "👛 کیف پول"
 BTN_TOPUP = "💳 افزایش موجودی"
 
 
 def main_menu() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=BTN_BUY)],
-            [KeyboardButton(text=BTN_SELL), KeyboardButton(text=BTN_WALLET)],
-            [KeyboardButton(text=BTN_TOPUP)],
-        ],
-        resize_keyboard=True,
-    )
+    rows: list[list[KeyboardButton]] = []
+    base = settings.public_base_url
+    if base:
+        rows.append(
+            [KeyboardButton(text=BTN_OPEN_APP, web_app=WebAppInfo(url=f"{base}/app/"))]
+        )
+    rows.append([KeyboardButton(text=BTN_WALLET), KeyboardButton(text=BTN_TOPUP)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)

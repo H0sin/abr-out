@@ -5,7 +5,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.bot.keyboards import BTN_BUY, BTN_SELL, BTN_WALLET, main_menu
+from app.bot.keyboards import BTN_WALLET, main_menu
 from app.common.db.models import User
 from app.common.db.session import SessionLocal
 
@@ -30,16 +30,6 @@ async def cmd_start(message: Message) -> None:
         "از منوی پایین یکی از گزینه‌ها رو انتخاب کن:",
         reply_markup=main_menu(),
     )
-
-
-@router.message(F.text == BTN_BUY)
-async def on_buy(message: Message) -> None:
-    await message.answer("بخش خرید — به‌زودی فعال می‌شود.", reply_markup=main_menu())
-
-
-@router.message(F.text == BTN_SELL)
-async def on_sell(message: Message) -> None:
-    await message.answer("بخش فروش — به‌زودی فعال می‌شود.", reply_markup=main_menu())
 
 
 @router.message(F.text == BTN_WALLET)

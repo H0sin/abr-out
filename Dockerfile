@@ -8,8 +8,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# --- builder: install deps into a venv ---
-FROM base AS builder
+# --- python builder: install deps into a venv ---
+FROM base AS pybuilder
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
     && rm -rf /var/lib/apt/lists/*
@@ -19,18 +19,29 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
     && /opt/venv/bin/pip install .
 
+# --- frontend builder: build the React Mini App ---
+FROM node:20-alpine AS webbuilder
+WORKDIR /web
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
 # --- runtime ---
 FROM base AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /opt/venv /opt/venv
+COPY --from=pybuilder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 COPY app ./app
 COPY migrations ./migrations
 COPY alembic.ini ./alembic.ini
+
+# Built React Mini App (FastAPI mounts this at /app)
+COPY --from=webbuilder /web/dist /app/static
 
 # default command can be overridden by compose for each service
 CMD ["python", "-m", "app.bot.main"]

@@ -1,25 +1,34 @@
-# Caddy serves the public API behind Cloudflare.
+# Caddy serves the public-facing surface behind Cloudflare.
 # - DOMAIN must point to this server (Cloudflare A record).
 # - Caddy auto-issues a Let's Encrypt cert via HTTP-01/TLS-ALPN.
 # - With Cloudflare proxy ON: set Cloudflare SSL mode to "Full (strict)".
 #
-# Only the /webhook/* and /health paths are exposed publicly.
-# The internal admin/prober endpoints stay on the docker network.
+# Public surface:
+#   /webhook/*  → 3rd-party payment webhooks
+#   /health     → uptime monitors
+#   /app/*      → React Telegram Mini App (static, served by FastAPI)
+#   /api/*      → Mini App backend (initData-authenticated)
+# Everything else is rejected; admin/prober endpoints stay on the docker net.
 
 {$DOMAIN} {
 	encode gzip
 
-	# Public: payment / 3rd-party webhooks
 	handle /webhook/* {
 		reverse_proxy api:8000
 	}
 
-	# Public: health check (handy for uptime monitors)
 	handle /health {
 		reverse_proxy api:8000
 	}
 
-	# Anything else → 404 (no public access to admin/prober/etc.)
+	handle /app/* {
+		reverse_proxy api:8000
+	}
+
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
 	handle {
 		respond "Not Found" 404
 	}
