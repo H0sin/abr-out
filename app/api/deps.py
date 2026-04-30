@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -7,6 +9,8 @@ from app.common.db.models import User
 from app.common.db.session import SessionLocal
 from app.common.settings import get_settings
 from app.common.telegram import verify_init_data
+
+log = logging.getLogger(__name__)
 
 
 async def require_internal_token(
@@ -27,16 +31,24 @@ async def current_user(
     return (upserting if needed) the corresponding User row. Blocks 403s.
     """
     if not authorization or not authorization.lower().startswith("tma "):
+        log.warning("auth failed: missing/invalid Authorization header (header=%r)", authorization)
         raise HTTPException(status_code=401, detail="missing tma auth")
 
     init_data = authorization[4:].strip()
     settings = get_settings()
     if not settings.bot_token:
+        log.error("auth failed: bot_token not configured")
         raise HTTPException(status_code=500, detail="bot not configured")
 
     try:
         payload = verify_init_data(init_data, settings.bot_token)
     except ValueError as e:
+        log.warning(
+            "auth failed: %s (initData length=%d, preview=%r)",
+            e,
+            len(init_data),
+            init_data[:80],
+        )
         raise HTTPException(status_code=401, detail=f"invalid initData: {e}") from e
 
     tg_user = payload.get("user")
