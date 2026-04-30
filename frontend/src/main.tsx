@@ -6,6 +6,13 @@ import { Browse } from "./pages/Browse";
 import { MyConfigs } from "./pages/MyConfigs";
 import { Sell } from "./pages/Sell";
 import { Wallet } from "./pages/Wallet";
+import { AdminLayout } from "./pages/admin/AdminLayout";
+import { AdminHome } from "./pages/admin/Home";
+import { AdminUsers } from "./pages/admin/Users";
+import { AdminUserDetail } from "./pages/admin/UserDetail";
+import { AdminUserTransactions } from "./pages/admin/UserTransactions";
+import { AdminBroadcast } from "./pages/admin/Broadcast";
+import { AdminSupport } from "./pages/admin/Support";
 import { ToastProvider } from "./lib/toast";
 import { MeProvider } from "./lib/MeContext";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -84,6 +91,17 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="my" element={<MyConfigs />} />
                 <Route path="sell" element={<Sell />} />
                 <Route path="wallet" element={<Wallet />} />
+                <Route path="admin" element={<AdminLayout />}>
+                  <Route index element={<AdminHome />} />
+                  <Route path="users" element={<AdminUsers />} />
+                  <Route path="users/:id" element={<AdminUserDetail />} />
+                  <Route
+                    path="users/:id/transactions"
+                    element={<AdminUserTransactions />}
+                  />
+                  <Route path="broadcast" element={<AdminBroadcast />} />
+                  <Route path="support" element={<AdminSupport />} />
+                </Route>
               </Route>
             </Routes>
           </HashRouter>

@@ -75,6 +75,18 @@ class SwapWalletTxStatus(str, enum.Enum):
     failed = "failed"
 
 
+class SupportDirection(str, enum.Enum):
+    in_ = "in"
+    out = "out"
+
+
+class BroadcastStatus(str, enum.Enum):
+    queued = "queued"
+    running = "running"
+    done = "done"
+    failed = "failed"
+
+
 # --- Tables ---
 
 
@@ -86,6 +98,10 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole, name="user_role"), default=UserRole.user, nullable=False
     )
+    is_blocked: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -107,6 +123,8 @@ class WalletTransaction(Base):
     currency: Mapped[str] = mapped_column(String(8), default="USD", nullable=False)
     type: Mapped[TxnType] = mapped_column(Enum(TxnType, name="txn_type"), nullable=False)
     ref: Mapped[str | None] = mapped_column(String(255))
+    note: Mapped[str | None] = mapped_column(Text)
+    created_by_admin_id: Mapped[int | None] = mapped_column(BigInteger)
     idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -115,6 +133,7 @@ class WalletTransaction(Base):
     __table_args__ = (
         Index("ix_wallet_transactions_user_currency", "user_id", "currency"),
         Index("ix_wallet_transactions_created_at", "created_at"),
+        Index("ix_wallet_transactions_user_type_created", "user_id", "type", "created_at"),
     )
 
 
@@ -310,3 +329,59 @@ class PaymentIntent(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+
+class SupportMessage(Base):
+    """Inbound (user→admins) and outbound (admin→user) support messages."""
+
+    __tablename__ = "support_messages"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.telegram_id", ondelete="CASCADE"), nullable=False
+    )
+    direction: Mapped[SupportDirection] = mapped_column(
+        Enum(SupportDirection, name="support_direction"), nullable=False
+    )
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Original message id in the user's chat (for forward/copy context).
+    user_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    # If admin replied, which admin telegram_id did it.
+    replied_by_admin_id: Mapped[int | None] = mapped_column(BigInteger)
+    # If we replied to a previous inbound message, link it.
+    replied_to_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("support_messages.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_support_messages_user_created", "user_id", "created_at"),
+        Index("ix_support_messages_direction_created", "direction", "created_at"),
+    )
+
+
+class Broadcast(Base):
+    """Admin broadcast job: a snapshot of the audience filter and progress."""
+
+    __tablename__ = "broadcasts"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    admin_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    # JSON-serialised audience filter, e.g.
+    # {"kind":"all"|"buyers"|"sellers"|"date_range","from":"...","to":"..."}
+    audience: Mapped[str] = mapped_column(Text, nullable=False)
+    total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[BroadcastStatus] = mapped_column(
+        Enum(BroadcastStatus, name="broadcast_status"),
+        default=BroadcastStatus.queued,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

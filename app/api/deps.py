@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.common.db.models import User
@@ -24,7 +24,7 @@ async def current_user(
 ) -> User:
     """
     Validate `Authorization: tma <initData>` from the Telegram Mini App and
-    return (upserting if needed) the corresponding User row.
+    return (upserting if needed) the corresponding User row. Blocks 403s.
     """
     if not authorization or not authorization.lower().startswith("tma "):
         raise HTTPException(status_code=401, detail="missing tma auth")
@@ -58,4 +58,16 @@ async def current_user(
         )
         result = await session.execute(stmt)
         await session.commit()
-        return result.scalar_one()
+        user = result.scalar_one()
+
+    if user.is_blocked:
+        raise HTTPException(status_code=403, detail="account_blocked")
+    return user
+
+
+async def current_admin(user: User = Depends(current_user)) -> User:
+    """Require the caller to be one of the configured admins."""
+    if user.telegram_id not in get_settings().admin_ids:
+        raise HTTPException(status_code=403, detail="admin only")
+    return user
+

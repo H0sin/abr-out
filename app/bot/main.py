@@ -8,7 +8,8 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
 from redis.asyncio import Redis
 
-from app.bot.handlers import menu_router, topup_router
+from app.bot.handlers import admin_router, menu_router, topup_router
+from app.bot.middlewares import BlockMiddleware
 from app.common.logging import logger, setup_logging
 from app.common.settings import get_settings
 
@@ -27,6 +28,9 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=storage)
+    dp.message.middleware(BlockMiddleware())
+    dp.callback_query.middleware(BlockMiddleware())
+    dp.include_router(admin_router)
     dp.include_router(menu_router)
     dp.include_router(topup_router)
 

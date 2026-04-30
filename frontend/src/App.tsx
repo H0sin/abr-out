@@ -5,10 +5,12 @@ import {
   StoreIcon,
   WalletIcon,
 } from "./components/icons";
+import { useMe } from "./lib/MeContext";
 import { haptic } from "./lib/useTelegram";
 
 export function App() {
   const loc = useLocation();
+  const { me } = useMe();
   return (
     <div className="app">
       <div className="content" key={loc.pathname}>
@@ -19,6 +21,7 @@ export function App() {
         <Tab to="/my" label="کانفیگ‌ها" icon={<SignalIcon />} />
         <Tab to="/sell" label="فروش" icon={<StoreIcon />} />
         <Tab to="/wallet" label="کیف پول" icon={<WalletIcon />} />
+        {me?.is_admin && <Tab to="/admin" label="ادمین" icon={<span>🛠</span>} />}
       </nav>
     </div>
   );

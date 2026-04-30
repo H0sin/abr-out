@@ -7,6 +7,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.common.logging import logger, setup_logging
 from app.common.settings import get_settings
 from app.worker.jobs.aggregate_ping import aggregate_pings_once
+from app.worker.jobs.broadcast import broadcast_tick
 from app.worker.jobs.enforce_balance import enforce_balances_once
 from app.worker.jobs.poll_traffic import poll_traffic_once
 
@@ -37,6 +38,15 @@ async def main() -> None:
         "interval",
         minutes=5,
         id="aggregate_ping",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    scheduler.add_job(
+        broadcast_tick,
+        "interval",
+        seconds=5,
+        id="broadcast",
         max_instances=1,
         coalesce=True,
     )

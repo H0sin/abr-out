@@ -1,4 +1,5 @@
 import { Skeleton } from "../components/ui";
+import { TransactionsList } from "../components/TransactionsList";
 import { useMe } from "../lib/MeContext";
 import { haptic } from "../lib/useTelegram";
 
@@ -106,15 +107,10 @@ export function Wallet() {
             </button>
           </div>
 
-          <div className="card" style={{ opacity: 0.7 }}>
-            <div className="row">
-              <div className="title">تاریخچه تراکنش‌ها</div>
-              <span className="badge">به‌زودی</span>
-            </div>
-            <p className="muted mt-2">
-              به‌زودی می‌توانید تاریخچه شارژ و خریدها را همین‌جا ببینید.
-            </p>
+          <div className="card" style={{ marginTop: 12, padding: 12 }}>
+            <div className="title">تاریخچه تراکنش‌ها</div>
           </div>
+          <TransactionsList />
         </>
       )}
     </div>

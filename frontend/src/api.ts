@@ -69,7 +69,45 @@ export type Me = {
   username: string | null;
   role: string;
   balance_usd: string; // Decimal serialised as string
+  is_admin: boolean;
+  is_blocked: boolean;
 };
+
+export type Transaction = {
+  id: number;
+  type: string;
+  amount: string;
+  currency: string;
+  ref: string | null;
+  note: string | null;
+  created_at: string;
+};
+
+export type TransactionsPage = {
+  items: Transaction[];
+  total: number;
+  page: number;
+  size: number;
+};
+
+export type TxFilter = {
+  type?: string; // CSV of TxnType
+  direction?: "all" | "credit" | "debit";
+  from?: string; // ISO
+  to?: string; // ISO
+  page?: number;
+  size?: number;
+};
+
+function qs(params: Record<string, string | number | undefined | null>): string {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    sp.set(k, String(v));
+  }
+  const s = sp.toString();
+  return s ? `?${s}` : "";
+}
 
 export type Listing = {
   id: number;
@@ -95,6 +133,18 @@ export type Config = {
 
 export const api = {
   me: () => request<Me>("/api/me"),
+  listMyTransactions: (f: TxFilter = {}) =>
+    request<TransactionsPage>(
+      "/api/me/transactions" +
+        qs({
+          type: f.type,
+          direction: f.direction,
+          from: f.from,
+          to: f.to,
+          page: f.page,
+          size: f.size,
+        }),
+    ),
   listListings: () => request<Listing[]>("/api/listings"),
   listMyListings: () => request<Listing[]>("/api/listings/mine"),
   createListing: (body: {
@@ -112,5 +162,133 @@ export const api = {
     request<Config>("/api/configs", {
       method: "POST",
       body: JSON.stringify({ listing_id }),
+    }),
+};
+
+// ---------- Admin ----------
+
+export type AdminUser = {
+  telegram_id: number;
+  username: string | null;
+  role: string;
+  is_blocked: boolean;
+  balance_usd: string;
+  configs_count: number;
+  listings_count: number;
+  created_at: string;
+  started_at: string | null;
+};
+
+export type AdminUsersPage = {
+  items: AdminUser[];
+  total: number;
+  page: number;
+  size: number;
+};
+
+export type AdminUserFilter = {
+  q?: string;
+  blocked?: "all" | "yes" | "no";
+  sort?: "created_at" | "balance" | "username" | "telegram_id";
+  order?: "asc" | "desc";
+  page?: number;
+  size?: number;
+};
+
+export type Audience = {
+  kind: "all" | "buyers" | "sellers" | "date_range";
+  from?: string;
+  to?: string;
+};
+
+export type BroadcastJob = {
+  id: number;
+  text: string;
+  status: "queued" | "running" | "done" | "failed";
+  total: number;
+  sent: number;
+  failed: number;
+  created_at: string;
+  finished_at: string | null;
+};
+
+export type SupportEntry = {
+  id: number;
+  user_id: number;
+  username: string | null;
+  direction: "in" | "out";
+  text: string;
+  replied_by_admin_id: number | null;
+  created_at: string;
+};
+
+export const adminApi = {
+  listUsers: (f: AdminUserFilter = {}) =>
+    request<AdminUsersPage>(
+      "/admin/users" +
+        qs({
+          q: f.q,
+          blocked: f.blocked,
+          sort: f.sort,
+          order: f.order,
+          page: f.page,
+          size: f.size,
+        }),
+    ),
+  getUser: (id: number) => request<AdminUser>(`/admin/users/${id}`),
+  setBlocked: (id: number, blocked: boolean) =>
+    request<AdminUser>(`/admin/users/${id}/block`, {
+      method: "POST",
+      body: JSON.stringify({ blocked }),
+    }),
+  addTransaction: (
+    id: number,
+    body: { amount: string | number; type: string; note: string },
+  ) =>
+    request<Transaction>(`/admin/users/${id}/transactions`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  listUserTransactions: (id: number, f: TxFilter = {}) =>
+    request<TransactionsPage>(
+      `/admin/users/${id}/transactions` +
+        qs({
+          type: f.type,
+          direction: f.direction,
+          from: f.from,
+          to: f.to,
+          page: f.page,
+          size: f.size,
+        }),
+    ),
+  sendDM: (id: number, text: string) =>
+    request<{ ok: boolean }>(`/admin/users/${id}/message`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
+  broadcastPreview: (audience: Audience) =>
+    request<{ count: number }>(`/admin/broadcast/preview`, {
+      method: "POST",
+      body: JSON.stringify({ audience }),
+    }),
+  broadcast: (text: string, audience: Audience) =>
+    request<BroadcastJob>(`/admin/broadcast`, {
+      method: "POST",
+      body: JSON.stringify({ text, audience }),
+    }),
+  getBroadcast: (id: number) => request<BroadcastJob>(`/admin/broadcast/${id}`),
+  listSupport: (params: { only_unanswered?: boolean; page?: number; size?: number } = {}) =>
+    request<{ items: SupportEntry[]; total: number; page: number; size: number }>(
+      `/admin/support` +
+        qs({
+          only_unanswered: params.only_unanswered ? "1" : undefined,
+          page: params.page,
+          size: params.size,
+        }),
+    ),
+  replySupport: (id: number, text: string) =>
+    request<{ ok: boolean }>(`/admin/support/${id}/reply`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
     }),
 };

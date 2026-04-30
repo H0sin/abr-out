@@ -8,6 +8,7 @@ from app.common.db.models import SwapWalletTx, SwapWalletTxStatus, TxnType, Wall
 from app.common.logging import logger
 from app.common.payment.swapwallet import verify_swapwallet_hmac
 from app.common.settings import get_settings
+from app.common.telegram_bot import send_message
 
 router = APIRouter(prefix="/webhook", tags=["webhook"])
 
@@ -72,8 +73,7 @@ async def swapwallet_callback(
         logger.info(
             "SwapWallet: topped up {} USD for user {}", tx.amount_usd, tx.user_id
         )
-        await _notify_user(
-            settings.bot_token,
+        await send_message(
             tx.user_id,
             f"✅ موجودی شما <b>{tx.amount_usd}$</b> شارژ شد.\n"
             f"🔢 کد پیگیری: <code>{tx.order_id}</code>",
@@ -82,8 +82,7 @@ async def swapwallet_callback(
     elif status in ("CANCELLED", "EXPIRED"):
         tx.status = SwapWalletTxStatus.cancelled
         await session.commit()
-        await _notify_user(
-            settings.bot_token,
+        await send_message(
             tx.user_id,
             f"❌ پرداخت شما لغو یا منقضی شد.\n"
             f"🔢 کد پیگیری: <code>{tx.order_id}</code>",
@@ -92,26 +91,11 @@ async def swapwallet_callback(
     elif status == "ERROR":
         tx.status = SwapWalletTxStatus.failed
         await session.commit()
-        await _notify_user(
-            settings.bot_token,
+        await send_message(
             tx.user_id,
             f"⚠️ پرداخت شما با خطا مواجه شد.\n"
             f"🔢 کد پیگیری: <code>{tx.order_id}</code>",
         )
 
     return Response(status_code=200)
-
-
-async def _notify_user(bot_token: str, chat_id: int, text: str) -> None:
-    """Send a Telegram message to a user via the Bot API."""
-    import httpx
-
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(
-                f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
-            )
-    except Exception:
-        logger.exception("Failed to notify user {} via Telegram", chat_id)
 
