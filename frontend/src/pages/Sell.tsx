@@ -53,7 +53,7 @@ export function Sell() {
         price_per_gb_usd: parseFloat(price),
       });
       haptic.success();
-      toast.success("ثبت شد. پس از تأیید ادمین فعال می‌شود.");
+      toast.success("اوت‌باند با موفقیت ثبت و فعال شد.");
       setTitle("");
       setHost("");
       setPort("");
@@ -70,7 +70,7 @@ export function Sell() {
 
   // Drive submit through Telegram MainButton for native feel.
   useMainButton({
-    text: busy ? "در حال ارسال..." : "ثبت outbound",
+    text: busy ? "در حال ارسال..." : "ثبت اوت‌باند",
     onClick: () => submit(),
     loading: busy,
     disabled: !valid || busy,
@@ -81,10 +81,9 @@ export function Sell() {
 
   return (
     <div>
-      <h2>فروش outbound</h2>
+      <h2>فروش اوت‌باند</h2>
       <p className="muted" style={{ marginTop: 4 }}>
-        outbound ایران خود را اضافه کنید. پس از تأیید ادمین در مارکت قابل خرید
-        است.
+        اوت‌باند ایران خود را اضافه کنید؛ بلافاصله در مارکت قابل خرید است.
       </p>
 
       <form onSubmit={submit} className="card mt-3" noValidate>
@@ -167,12 +166,12 @@ export function Sell() {
               <span className="spinner" /> در حال ارسال...
             </>
           ) : (
-            "ثبت outbound"
+            "ثبت اوت‌باند"
           )}
         </button>
       </form>
 
-      <h3 className="mt-6">outboundهای من</h3>
+      <h3 className="mt-6">اوت‌باندهای من</h3>
       {error && <div className="alert alert-error mt-2">{error}</div>}
       {loading && !mine && (
         <>
@@ -181,7 +180,7 @@ export function Sell() {
         </>
       )}
       {mine && mine.length === 0 && (
-        <EmptyState emoji="🏷" title="هنوز outboundی ثبت نکرده‌اید" />
+        <EmptyState emoji="🏷" title="هنوز اوت‌باندی ثبت نکرده‌اید" />
       )}
       {mine?.map((l: Listing) => (
         <article key={l.id} className="card">

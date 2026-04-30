@@ -2,6 +2,7 @@ import { Skeleton } from "../components/ui";
 import { TransactionsList } from "../components/TransactionsList";
 import { useMe } from "../lib/MeContext";
 import { haptic } from "../lib/useTelegram";
+import { Link } from "react-router-dom";
 
 function formatUsd(raw: string): string {
   const n = parseFloat(raw);
@@ -106,6 +107,27 @@ export function Wallet() {
               بازگشت به ربات
             </button>
           </div>
+
+          {me.is_admin && (
+            <Link
+              to="/admin"
+              onClick={() => haptic.selection()}
+              style={{ textDecoration: "none", color: "inherit" }}
+            >
+              <div className="card">
+                <div className="row" style={{ alignItems: "center" }}>
+                  <div style={{ fontSize: 24 }}>🛠</div>
+                  <div style={{ flex: 1 }}>
+                    <div className="title">پنل مدیریت</div>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      ورود به پنل ادمین
+                    </div>
+                  </div>
+                  <div className="muted">›</div>
+                </div>
+              </div>
+            </Link>
+          )}
 
           <div className="card" style={{ marginTop: 12, padding: 12 }}>
             <div className="title">تاریخچه تراکنش‌ها</div>

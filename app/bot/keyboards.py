@@ -27,16 +27,22 @@ def main_menu() -> ReplyKeyboardMarkup:
 def open_app_inline() -> InlineKeyboardMarkup | None:
     """Inline button to open the Mini App. Inline WebApp buttons send initData
     on all platforms (including Telegram Desktop), unlike reply-keyboard ones
-    which can sometimes be flaky on desktop clients."""
+    which can sometimes be flaky on desktop clients.
+
+    A `?v=<timestamp>` is appended so Telegram's aggressive WebView cache is
+    busted whenever a new bot message is sent."""
+    import time
+
     base = get_settings().public_base_url
     if not base:
         return None
+    url = f"{base}/app/?v={int(time.time())}"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text=BTN_OPEN_APP,
-                    web_app=WebAppInfo(url=f"{base}/app/"),
+                    web_app=WebAppInfo(url=url),
                 )
             ]
         ]

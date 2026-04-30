@@ -69,7 +69,7 @@ export function Browse() {
         </button>
       </header>
       <p className="muted" style={{ marginTop: 0 }}>
-        outboundهای فعال — مرتب‌سازی خود را انتخاب کنید
+        اوت‌باندهای فعال — مرتب‌سازی خود را انتخاب کنید
       </p>
 
       <div className="chips">
@@ -97,7 +97,7 @@ export function Browse() {
       {sorted && sorted.length === 0 && (
         <EmptyState
           emoji="🛰"
-          title="هیچ outbound فعالی موجود نیست"
+          title="هیچ اوت‌باند فعالی موجود نیست"
           hint="کمی بعد دوباره سر بزنید."
         />
       )}

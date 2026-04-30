@@ -78,7 +78,7 @@ async def cmd_start(message: Message) -> None:
         return
 
     await message.answer(
-        "سلام! به مارکت‌پلیس اوتباند خوش اومدی.\n\n"
+        "سلام! به مارکت‌پلیس اوت\u200cباند خوش اومدی.\n\n"
         "از منوی پایین یکی از گزینه‌ها رو انتخاب کن:",
         reply_markup=main_menu(),
     )

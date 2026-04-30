@@ -156,21 +156,18 @@ export function AdminUserDetail() {
           </div>
           <div>
             {data.is_blocked ? (
-              <span className="badge" style={{ background: "#d23", color: "#fff" }}>
-                مسدود
-              </span>
+              <span className="badge badge-rejected">مسدود</span>
             ) : (
-              <span className="badge">فعال</span>
+              <span className="badge badge-active">فعال</span>
             )}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
           <button
             type="button"
-            className="btn btn-primary"
+            className={"btn " + (data.is_blocked ? "btn-primary" : "btn-danger")}
             disabled={blockBusy}
             onClick={toggleBlock}
-            style={data.is_blocked ? undefined : { background: "#d23" }}
           >
             {data.is_blocked ? "🔓 آنبلاک" : "🚫 بلاک"}
           </button>

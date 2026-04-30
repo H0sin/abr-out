@@ -141,9 +141,7 @@ export function AdminUsers() {
                   <div className="title" style={{ fontSize: 14 }}>
                     {u.username ? `@${u.username}` : `ID: ${u.telegram_id}`}{" "}
                     {u.is_blocked && (
-                      <span className="badge" style={{ background: "#d23", color: "#fff" }}>
-                        مسدود
-                      </span>
+                      <span className="badge badge-rejected">مسدود</span>
                     )}
                   </div>
                   <div className="muted" style={{ fontSize: 11, direction: "ltr" }}>

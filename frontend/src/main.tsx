@@ -54,12 +54,19 @@ if (
 // re-apply whenever the user flips light/dark in Telegram settings.
 function applyTheme() {
   const t = window.Telegram?.WebApp;
+  // Prefer Telegram's reported color scheme; fall back to OS-level dark
+  // preference when Telegram does not expose one (older clients / non-TG).
+  const scheme =
+    t?.colorScheme ??
+    (window.matchMedia?.("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light");
+  document.documentElement.dataset.scheme = scheme;
   if (!t) return;
   const bg =
     t.themeParams?.secondary_bg_color ||
     t.themeParams?.bg_color ||
-    (t.colorScheme === "dark" ? "#0b1220" : "#f5f6fa");
-  document.documentElement.dataset.scheme = t.colorScheme;
+    (scheme === "dark" ? "#0b1220" : "#f5f6fa");
   document
     .querySelector('meta[name="theme-color"]')
     ?.setAttribute("content", bg);
@@ -72,6 +79,9 @@ function applyTheme() {
 }
 applyTheme();
 tg?.onEvent("themeChanged", applyTheme);
+window
+  .matchMedia?.("(prefers-color-scheme: dark)")
+  .addEventListener?.("change", applyTheme);
 
 // Dev-only error overlay (kept off in production builds).
 if (import.meta.env.DEV) {

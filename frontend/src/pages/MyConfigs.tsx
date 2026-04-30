@@ -77,7 +77,7 @@ export function MyConfigs() {
         <EmptyState
           emoji="📡"
           title="هنوز کانفیگی نخریده‌اید"
-          hint="از تب «خرید» اولین outbound خود را تهیه کنید."
+          hint="از تب «خرید» اولین اوت‌باند خود را تهیه کنید."
         />
       )}
 

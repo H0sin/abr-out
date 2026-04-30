@@ -94,10 +94,7 @@ async def create_listing(
     body: ListingCreateIn,
     user: User = Depends(current_user),
 ) -> ListingOut:
-    """
-    Seller creates a new listing. It starts in 'pending' state and an admin
-    must approve + provision the foreign 3x-ui inbound before it goes 'active'.
-    """
+    """Seller creates a new listing. It is published immediately as 'active'."""
     async with SessionLocal() as session:
         # uniqueness on port is enforced by the DB; surface a friendly error
         existing = await session.execute(
@@ -112,7 +109,7 @@ async def create_listing(
             iran_host=body.iran_host,
             port=body.port,
             price_per_gb_usd=body.price_per_gb_usd,
-            status=ListingStatus.pending,
+            status=ListingStatus.active,
         )
         session.add(listing)
         await session.commit()
