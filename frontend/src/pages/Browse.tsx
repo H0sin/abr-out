@@ -141,8 +141,9 @@ export function Browse() {
           >
             <span>خرید کانفیگ</span>
             <span className="btn-buy-price">
+              <span className="btn-buy-unit">گیگی</span>
               <span className="num">{fmtUsd(l.buyer_price_per_gb_usd)}</span>
-              <span className="btn-buy-unit">$/GB</span>
+              <span className="btn-buy-unit">دلار</span>
             </span>
           </button>
         </article>
