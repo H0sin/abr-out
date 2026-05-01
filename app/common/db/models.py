@@ -153,6 +153,15 @@ class Listing(Base):
     )
     avg_ping_ms: Mapped[int | None] = mapped_column(Integer)
     sales_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Last-seen panel-level cumulative up/down for this inbound.
+    # Used by the traffic poller for diff-based outbound billing
+    # (3x-ui has no per-inbound total reset endpoint).
+    last_outbound_up_bytes: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0", nullable=False
+    )
+    last_outbound_down_bytes: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -195,6 +204,12 @@ class Config(Base):
         nullable=False,
     )
     last_traffic_bytes: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    # Fallback diff anchor: only set when a panel-side reset failed in the
+    # previous poll cycle. In the normal read→reset flow this stays at 0
+    # because the panel counters are zeroed each cycle.
+    last_snapshot_bytes: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -208,8 +223,104 @@ class Config(Base):
     )
 
 
+class OutboundUsage(Base):
+    """Per-cycle traffic recorded at the inbound (seller outbound) level.
+
+    One row per (listing, poll cycle) when ``delta_total_bytes > 0``.
+    Source of the seller-side ``usage_credit`` wallet transaction.
+    """
+
+    __tablename__ = "outbound_usage"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    listing_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("listings.id", ondelete="CASCADE"), nullable=False
+    )
+    seller_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    panel_inbound_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    cycle_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=False
+    )
+    delta_up_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    delta_down_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    delta_total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    gb: Mapped[Decimal] = mapped_column(Numeric(20, 10), nullable=False)
+    seller_credit_usd: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), nullable=False
+    )
+    panel_total_up_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    panel_total_down_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reset_attempted: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    reset_succeeded: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    sampled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_outbound_usage_sampled_at", "sampled_at"),
+        Index("ix_outbound_usage_listing_time", "listing_id", "sampled_at"),
+        UniqueConstraint(
+            "listing_id", "cycle_id", name="uq_outbound_usage_listing_cycle"
+        ),
+    )
+
+
+class ConfigUsage(Base):
+    """Per-cycle traffic recorded at the client (buyer config) level.
+
+    One row per (config, poll cycle) when ``delta_total_bytes > 0``.
+    Source of the buyer-side ``usage_debit`` wallet transaction.
+    """
+
+    __tablename__ = "config_usage"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    config_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("configs.id", ondelete="CASCADE"), nullable=False
+    )
+    listing_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    buyer_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    seller_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cycle_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=False
+    )
+    delta_up_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    delta_down_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    delta_total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    gb: Mapped[Decimal] = mapped_column(Numeric(20, 10), nullable=False)
+    buyer_debit_usd: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), nullable=False
+    )
+    panel_email: Mapped[str] = mapped_column(String(128), nullable=False)
+    reset_attempted: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    reset_succeeded: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    sampled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_config_usage_sampled_at", "sampled_at"),
+        Index("ix_config_usage_config_time", "config_id", "sampled_at"),
+        UniqueConstraint(
+            "config_id", "cycle_id", name="uq_config_usage_config_cycle"
+        ),
+    )
+
+
 class UsageEvent(Base):
-    """One unit of measured traffic. Source of usage_* wallet transactions."""
+    """Legacy per-cycle billing unit (kept for historical data).
+
+    Superseded by :class:`OutboundUsage` + :class:`ConfigUsage` since the
+    read→reset poller landed; no new rows are inserted here.
+    """
 
     __tablename__ = "usage_events"
 

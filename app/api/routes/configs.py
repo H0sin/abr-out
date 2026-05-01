@@ -7,12 +7,13 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import current_user
 from app.common.db.models import (
     Config,
     ConfigStatus,
+    ConfigUsage,
     Listing,
     ListingStatus,
     User,
@@ -60,7 +61,7 @@ class ConfigCreateIn(BaseModel):
     total_gb_limit: float | None = Field(default=None, gt=0, le=100000)
 
 
-def _to_out(c: Config, l: Listing) -> ConfigOut:
+def _to_out(c: Config, l: Listing, total_used_bytes: int = 0) -> ConfigOut:
     return ConfigOut(
         id=c.id,
         listing_id=c.listing_id,
@@ -69,7 +70,7 @@ def _to_out(c: Config, l: Listing) -> ConfigOut:
         panel_client_email=c.panel_client_email,
         vless_link=c.vless_link,
         status=c.status.value,
-        last_traffic_bytes=c.last_traffic_bytes,
+        last_traffic_bytes=total_used_bytes,
         expiry_at=c.expiry_at,
         total_gb_limit=(
             float(c.total_gb_limit) if c.total_gb_limit is not None else None
@@ -89,7 +90,24 @@ async def list_my_configs(
             .order_by(Config.created_at.desc())
         )
         rows = result.all()
-    return [_to_out(c, l) for (c, l) in rows]
+        # Aggregate cumulative used bytes per config from config_usage.
+        config_ids = [c.id for (c, _l) in rows]
+        totals: dict[int, int] = {}
+        if config_ids:
+            usage_rows = (
+                await session.execute(
+                    select(
+                        ConfigUsage.config_id,
+                        func.coalesce(
+                            func.sum(ConfigUsage.delta_total_bytes), 0
+                        ),
+                    )
+                    .where(ConfigUsage.config_id.in_(config_ids))
+                    .group_by(ConfigUsage.config_id)
+                )
+            ).all()
+            totals = {cid: int(total) for cid, total in usage_rows}
+    return [_to_out(c, l, totals.get(c.id, 0)) for (c, l) in rows]
 
 
 @router.post("", response_model=ConfigOut, status_code=201)

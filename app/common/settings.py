@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     commission_pct: Decimal = Decimal("0.15")
     min_topup_usd: Decimal = Decimal("2")
     traffic_poll_interval_sec: int = 60
+    # Kill-switch for the panel-side reset step of the read→reset poller.
+    # When False, the poller still reads and bills via diff but does not
+    # call resetAllClientTraffics — useful for debugging.
+    traffic_reset_enabled: bool = True
 
     # Payments
     nowpayments_api_key: str = ""

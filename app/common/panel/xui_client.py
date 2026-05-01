@@ -44,6 +44,24 @@ class ClientTraffic:
         return self.up + self.down
 
 
+@dataclass(slots=True)
+class InboundSnapshot:
+    """Per-inbound traffic snapshot: panel-level up/down plus per-client stats.
+
+    All byte counters are cumulative on the panel since the last reset.
+    """
+
+    inbound_id: int
+    up: int
+    down: int
+    enable: bool
+    clients: list[ClientTraffic]
+
+    @property
+    def total(self) -> int:
+        return self.up + self.down
+
+
 class XuiClient:
     def __init__(
         self,
@@ -239,21 +257,46 @@ class XuiClient:
 
     async def get_client_traffics(self, inbound_id: int) -> list[ClientTraffic]:
         """Return per-client up/down byte counters for a given inbound."""
+        snap = await self.get_inbound_snapshot(inbound_id)
+        return snap.clients
+
+    async def get_inbound_snapshot(self, inbound_id: int) -> InboundSnapshot:
+        """One round-trip: panel-level up/down + ``clientStats[]`` for an inbound.
+
+        Used by the traffic poller to bill the seller (outbound totals) and
+        the buyers (per-client totals) from the same point-in-time read.
+        """
         inbound = await self._request(
             "GET", f"/panel/api/inbounds/get/{inbound_id}"
         )
         obj = inbound.get("obj") or {}
-        traffics = obj.get("clientStats") or []
-        out: list[ClientTraffic] = []
-        for t in traffics:
-            out.append(
-                ClientTraffic(
-                    email=t.get("email", ""),
-                    up=int(t.get("up", 0)),
-                    down=int(t.get("down", 0)),
-                )
+        clients = [
+            ClientTraffic(
+                email=t.get("email", ""),
+                up=int(t.get("up", 0)),
+                down=int(t.get("down", 0)),
             )
-        return out
+            for t in (obj.get("clientStats") or [])
+        ]
+        return InboundSnapshot(
+            inbound_id=int(obj.get("id", inbound_id)),
+            up=int(obj.get("up", 0)),
+            down=int(obj.get("down", 0)),
+            enable=bool(obj.get("enable", True)),
+            clients=clients,
+        )
+
+    async def reset_inbound_clients_traffic(self, inbound_id: int) -> None:
+        """Reset all client traffic counters for one inbound to zero on the panel.
+
+        Endpoint: ``POST /panel/api/inbounds/resetAllClientTraffics/{inbound_id}``.
+        Note: 3x-ui does not expose a per-inbound reset for the inbound's own
+        ``up``/``down`` totals — the poller tracks those via diff instead.
+        """
+        await self._request(
+            "POST",
+            f"/panel/api/inbounds/resetAllClientTraffics/{inbound_id}",
+        )
 
 
 def build_vless_link(
