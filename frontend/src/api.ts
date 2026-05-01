@@ -225,7 +225,7 @@ export type SupportEntry = {
 export const adminApi = {
   listUsers: (f: AdminUserFilter = {}) =>
     request<AdminUsersPage>(
-      "/admin/users" +
+      "/api/admin/users" +
         qs({
           q: f.q,
           blocked: f.blocked,
@@ -235,9 +235,9 @@ export const adminApi = {
           size: f.size,
         }),
     ),
-  getUser: (id: number) => request<AdminUser>(`/admin/users/${id}`),
+  getUser: (id: number) => request<AdminUser>(`/api/admin/users/${id}`),
   setBlocked: (id: number, blocked: boolean) =>
-    request<AdminUser>(`/admin/users/${id}/block`, {
+    request<AdminUser>(`/api/admin/users/${id}/block`, {
       method: "POST",
       body: JSON.stringify({ blocked }),
     }),
@@ -245,13 +245,13 @@ export const adminApi = {
     id: number,
     body: { amount: string | number; type: string; note: string },
   ) =>
-    request<Transaction>(`/admin/users/${id}/transactions`, {
+    request<Transaction>(`/api/admin/users/${id}/transactions`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
   listUserTransactions: (id: number, f: TxFilter = {}) =>
     request<TransactionsPage>(
-      `/admin/users/${id}/transactions` +
+      `/api/admin/users/${id}/transactions` +
         qs({
           type: f.type,
           direction: f.direction,
@@ -262,24 +262,24 @@ export const adminApi = {
         }),
     ),
   sendDM: (id: number, text: string) =>
-    request<{ ok: boolean }>(`/admin/users/${id}/message`, {
+    request<{ ok: boolean }>(`/api/admin/users/${id}/message`, {
       method: "POST",
       body: JSON.stringify({ text }),
     }),
   broadcastPreview: (audience: Audience) =>
-    request<{ count: number }>(`/admin/broadcast/preview`, {
+    request<{ count: number }>(`/api/admin/broadcast/preview`, {
       method: "POST",
       body: JSON.stringify({ audience }),
     }),
   broadcast: (text: string, audience: Audience) =>
-    request<BroadcastJob>(`/admin/broadcast`, {
+    request<BroadcastJob>(`/api/admin/broadcast`, {
       method: "POST",
       body: JSON.stringify({ text, audience }),
     }),
-  getBroadcast: (id: number) => request<BroadcastJob>(`/admin/broadcast/${id}`),
+  getBroadcast: (id: number) => request<BroadcastJob>(`/api/admin/broadcast/${id}`),
   listSupport: (params: { only_unanswered?: boolean; page?: number; size?: number } = {}) =>
     request<{ items: SupportEntry[]; total: number; page: number; size: number }>(
-      `/admin/support` +
+      `/api/admin/support` +
         qs({
           only_unanswered: params.only_unanswered ? "1" : undefined,
           page: params.page,
@@ -287,7 +287,7 @@ export const adminApi = {
         }),
     ),
   replySupport: (id: number, text: string) =>
-    request<{ ok: boolean }>(`/admin/support/${id}/reply`, {
+    request<{ ok: boolean }>(`/api/admin/support/${id}/reply`, {
       method: "POST",
       body: JSON.stringify({ text }),
     }),

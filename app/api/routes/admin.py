@@ -32,7 +32,7 @@ from app.common.db.session import SessionLocal
 from app.common.logging import logger
 from app.common.telegram_bot import send_message
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 # ---------- Schemas ----------
