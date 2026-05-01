@@ -528,7 +528,7 @@ function AutoWithdrawSection({ defaultAddress }: { defaultAddress?: string }) {
             className={mode === "threshold" ? "active" : ""}
             onClick={() => setMode("threshold")}
           >
-            آستانه‌ای
+            مبلغی
           </button>
         </div>
 
