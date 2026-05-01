@@ -120,6 +120,9 @@ export type Listing = {
   iran_host?: string | null;
   port?: number | null;
   price_per_gb_usd: string;
+  // Commission-inclusive per-GB price for buyers. Always populated by the
+  // backend; the marketplace UI shows only this value (no fee breakdown).
+  buyer_price_per_gb_usd: string;
   avg_ping_ms: number | null;
   sales_count: number;
   seller_username: string | null;

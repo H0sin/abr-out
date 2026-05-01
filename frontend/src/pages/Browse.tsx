@@ -125,28 +125,25 @@ export function Browse() {
                 className="row gap-2 mt-2"
                 style={{ justifyContent: "flex-start", flexWrap: "wrap" }}
               >
-                <span className="stat-pill" title="ترافیک فروخته‌شده (کل)">
-                  کل <span className="num">{l.total_gb_sold.toFixed(1)}</span> GB
-                </span>
-                <span className="stat-pill" title="ترافیک ۲۴ ساعت اخیر">
-                  ۲۴س <span className="num">{l.gb_sold_24h.toFixed(2)}</span> GB
-                </span>
                 <StabilityPct pct={l.stability_pct} />
+                <span className="stat-pill" title="مجموع ترافیک فروخته‌شده">
+                  مجموع فروش <span className="num">{l.total_gb_sold.toFixed(1)}</span> GB
+                </span>
               </div>
-            </div>
-            <div className="price-tag">
-              <span className="num-big num">{fmtUsd(l.price_per_gb_usd)}</span>
-              <span className="num-small">$/GB</span>
             </div>
           </div>
           <button
-            className="btn btn-primary mt-3"
+            className="btn btn-primary btn-buy mt-3"
             onClick={() => {
               haptic.selection();
               setOpenListing(l);
             }}
           >
-            خرید کانفیگ
+            <span>خرید کانفیگ</span>
+            <span className="btn-buy-price">
+              <span className="num">{fmtUsd(l.buyer_price_per_gb_usd)}</span>
+              <span className="btn-buy-unit">$/GB</span>
+            </span>
           </button>
         </article>
       ))}
@@ -189,6 +186,8 @@ function BuyModal({
   const [step, setStep] = useState<Step>("form");
   const [name, setName] = useState("");
   const [days, setDays] = useState<number | null>(null);
+  const [customExpiry, setCustomExpiry] = useState(false);
+  const [customDays, setCustomDays] = useState("");
   const [gb, setGb] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<Config | null>(null);
@@ -200,6 +199,8 @@ function BuyModal({
     setStep("form");
     setName("");
     setDays(null);
+    setCustomExpiry(false);
+    setCustomDays("");
     setGb("");
     setBusy(false);
     setCreated(null);
@@ -222,6 +223,15 @@ function BuyModal({
       toastError("نام فقط با حروف انگلیسی، عدد، فاصله، نقطه و خط تیره");
       return;
     }
+    let expiry_days: number | null = days;
+    if (customExpiry) {
+      const d = parseInt(customDays, 10);
+      if (!Number.isFinite(d) || d <= 0 || d > 3650) {
+        toastError("تعداد روز نامعتبر است (۱ تا ۳۶۵۰)");
+        return;
+      }
+      expiry_days = d;
+    }
     let total_gb_limit: number | null = null;
     if (gb.trim()) {
       const n = parseFloat(gb);
@@ -236,7 +246,7 @@ function BuyModal({
       const cfg = await api.buyConfig({
         listing_id: listing!.id,
         name: trimmed,
-        expiry_days: days,
+        expiry_days,
         total_gb_limit,
       });
       haptic.success();
@@ -302,14 +312,15 @@ function BuyModal({
 
       {step === "form" && !insufficient && (
         <div>
-          <div className="muted" style={{ marginBottom: 4 }}>
-            قیمت: <span className="num">{fmtUsd(listing.price_per_gb_usd)}</span>$ / گیگ
+          <div className="muted" style={{ marginBottom: 8 }}>
+            قیمت: <span className="num">{fmtUsd(listing.buyer_price_per_gb_usd)}</span>$ / گیگ
             — موجودی: <span className="num">{fmtUsd(balance)}</span>$
           </div>
 
           <div className="field">
-            <label>نام کانفیگ</label>
+            <label className="field-label">نام کانفیگ</label>
             <input
+              className="input"
               type="text"
               maxLength={32}
               dir="ltr"
@@ -322,28 +333,59 @@ function BuyModal({
             </div>
           </div>
 
+          <div className="alert alert-info" style={{ marginTop: 8 }}>
+            مقادیر <b>مدت اعتبار</b> و <b>محدودیت حجم</b> فقط برای تنظیم محدودیت
+            توسط شماست (مثلاً اگر می‌خواهید این کانفیگ را به دیگری بفروشید).
+            هیچ تأثیری روی قیمت یا عملکرد ربات ندارند.
+          </div>
+
           <div className="field">
-            <label>مدت اعتبار</label>
+            <label className="field-label">مدت اعتبار</label>
             <div className="chips">
               {EXPIRY_PRESETS.map((p) => (
                 <button
                   key={String(p.days)}
                   type="button"
-                  className={`chip${days === p.days ? " active" : ""}`}
+                  className={`chip${!customExpiry && days === p.days ? " active" : ""}`}
                   onClick={() => {
                     haptic.selection();
+                    setCustomExpiry(false);
                     setDays(p.days);
                   }}
                 >
                   {p.label}
                 </button>
               ))}
+              <button
+                type="button"
+                className={`chip${customExpiry ? " active" : ""}`}
+                onClick={() => {
+                  haptic.selection();
+                  setCustomExpiry(true);
+                }}
+              >
+                دلخواه
+              </button>
             </div>
+            {customExpiry && (
+              <input
+                className="input mt-2"
+                type="text"
+                inputMode="numeric"
+                dir="ltr"
+                placeholder="تعداد روز (۱ تا ۳۶۵۰)"
+                value={customDays}
+                onChange={(e) =>
+                  setCustomDays(e.target.value.replace(/\D/g, ""))
+                }
+              />
+            )}
           </div>
 
           <div className="field">
-            <label>محدودیت حجم (گیگابایت — خالی = نامحدود)</label>
+            <label className="field-label">محدودیت حجم (گیگابایت — خالی = نامحدود)</label>
             <input
+              className="input"
               type="number"
               min={0}
               step="0.1"

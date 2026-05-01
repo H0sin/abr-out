@@ -18,8 +18,20 @@ from app.common.db.models import (
 from app.common.db.session import SessionLocal
 from app.common.logging import logger
 from app.common.panel.xui_client import XuiClient, XuiError
+from app.common.settings import get_settings
 
 router = APIRouter(prefix="/api/listings", tags=["listings"])
+
+
+def _buyer_price(raw: Decimal, commission_mult: Decimal) -> Decimal:
+    """Return the buyer-facing per-GB price (commission-inclusive).
+
+    Quantized to 4 decimal places so the wire representation is stable and
+    matches the precision used elsewhere in the UI.
+    """
+    from decimal import ROUND_HALF_UP
+
+    return (raw * commission_mult).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
 
 # ASCII-only remark/title: latin letters, digits, space, dash, underscore, dot.
 # Persian/Arabic and other non-ASCII are rejected so that 3x-ui inbound remarks
@@ -43,6 +55,11 @@ class ListingOut(BaseModel):
     iran_host: str | None = None
     port: int | None = None
     price_per_gb_usd: Decimal
+    # Commission-inclusive price shown to buyers. Computed as
+    # ``price_per_gb_usd * (1 + commission_pct)``. Sellers still see the raw
+    # ``price_per_gb_usd`` on their /mine view; the marketplace UI uses this
+    # field exclusively (no separate fee/commission line is shown to buyers).
+    buyer_price_per_gb_usd: Decimal = Decimal("0")
     avg_ping_ms: int | None
     sales_count: int
     seller_username: str | None = None
@@ -106,6 +123,7 @@ async def list_active(
         gb_24h_by_listing: dict[int, float] = {
             int(lid): float(gb24) for (lid, gb24) in usage_24h_rows.all()
         }
+    commission_mult = Decimal("1") + get_settings().commission_pct
     # Hide seller-identifying fields (title/iran_host/port/seller_username)
     # so a buyer cannot match a listing back to the seller's Telegram or
     # external IP and contact them outside the bot.
@@ -113,6 +131,7 @@ async def list_active(
         ListingOut(
             id=l.id,
             price_per_gb_usd=l.price_per_gb_usd,
+            buyer_price_per_gb_usd=_buyer_price(l.price_per_gb_usd, commission_mult),
             avg_ping_ms=l.avg_ping_ms,
             sales_count=l.sales_count,
             status=l.status.value,
@@ -136,6 +155,7 @@ async def list_my(
             .order_by(Listing.created_at.desc())
         )
         listings = result.scalars().all()
+    commission_mult = Decimal("1") + get_settings().commission_pct
     return [
         ListingOut(
             id=l.id,
@@ -143,6 +163,7 @@ async def list_my(
             iran_host=l.iran_host,
             port=l.port,
             price_per_gb_usd=l.price_per_gb_usd,
+            buyer_price_per_gb_usd=_buyer_price(l.price_per_gb_usd, commission_mult),
             avg_ping_ms=l.avg_ping_ms,
             sales_count=l.sales_count,
             seller_username=user.username,
@@ -252,12 +273,14 @@ async def create_listing(
         listing.panel_inbound_id,
     )
 
+    commission_mult = Decimal("1") + get_settings().commission_pct
     return ListingOut(
         id=listing.id,
         title=listing.title,
         iran_host=listing.iran_host,
         port=listing.port,
         price_per_gb_usd=listing.price_per_gb_usd,
+        buyer_price_per_gb_usd=_buyer_price(listing.price_per_gb_usd, commission_mult),
         avg_ping_ms=listing.avg_ping_ms,
         sales_count=listing.sales_count,
         seller_username=user.username,

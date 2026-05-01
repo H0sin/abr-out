@@ -9,7 +9,7 @@ import {
 } from "../api";
 import { useMe } from "../lib/MeContext";
 import { useToast } from "../lib/toast";
-import { Skeleton } from "../components/ui";
+import { Skeleton, Spinner } from "../components/ui";
 import { haptic } from "../lib/useTelegram";
 
 const ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
@@ -17,7 +17,7 @@ const STATUS_FA: Record<Withdrawal["status"], string> = {
   pending: "در صف ارسال",
   submitting: "در حال ارسال…",
   submitted: "ارسال‌شده — منتظر تأیید شبکه",
-  confirmed: "تأیید شد ✅",
+  confirmed: "تأیید شد",
   failed: "ناموفق",
   refunded: "بازگشت داده شد",
 };
@@ -30,6 +30,23 @@ function fmt(n: string | null | undefined, digits = 4): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: digits,
   });
+}
+
+function statusClass(s: Withdrawal["status"]): string {
+  if (s === "confirmed") return "status-stepper is-success";
+  if (s === "failed" || s === "refunded") return "status-stepper is-error";
+  return "status-stepper is-active";
+}
+
+async function pasteFromClipboard(): Promise<string | null> {
+  try {
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      return await navigator.clipboard.readText();
+    }
+  } catch {
+    /* permission denied or unsupported */
+  }
+  return null;
 }
 
 export function Withdraw() {
@@ -72,15 +89,29 @@ export function Withdraw() {
 
   const balance = useMemo(() => parseFloat(me?.balance_usd ?? "0") || 0, [me]);
   const amountNum = parseFloat(amount);
-  const addrOk = ADDR_RE.test(address.trim());
+  const addrTrim = address.trim();
+  const addrOk = ADDR_RE.test(addrTrim);
+  const addrInvalid = address.length > 0 && !addrOk;
   const amountOk =
     Number.isFinite(amountNum) && amountNum > 0 && amountNum <= balance;
   const canSubmit =
     addrOk && amountOk && !!quote && parseFloat(quote.net_usdt) > 0 && !submitting;
 
-  function fillAll() {
+  function setQuickPercent(pct: number) {
     haptic.light();
-    setAmount(String(balance.toFixed(4)));
+    if (balance <= 0) return;
+    const v = pct >= 1 ? balance : balance * pct;
+    setAmount(v.toFixed(4));
+  }
+
+  async function onPasteAddress() {
+    const txt = await pasteFromClipboard();
+    if (txt) {
+      setAddress(txt.trim());
+      haptic.light();
+    } else {
+      toast.info("دسترسی به کلیپ‌بورد در دسترس نیست.");
+    }
   }
 
   async function onSubmit() {
@@ -89,7 +120,7 @@ export function Withdraw() {
     try {
       const w = await api.createWithdrawal({
         amount_usd: amount,
-        to_address: address.trim(),
+        to_address: addrTrim,
       });
       toast.success("درخواست ثبت شد. در حال ارسال به شبکه…");
       haptic.success();
@@ -151,79 +182,145 @@ export function Withdraw() {
       <div className="card">
         <div className="title">برداشت دستی</div>
         <p className="muted mt-1" style={{ fontSize: 12 }}>
-          مبلغ به دلار وارد شود؛ کارمزد شبکه از همان مبلغ کسر و مابقی به صورت
+          مبلغ به دلار وارد شود؛ کارمزد شبکه از همان مبلغ کسر و مابقی به‌صورت
           USDT-BEP20 به آدرس شما ارسال می‌شود.
         </p>
 
-        <label className="field-label" style={{ marginTop: 12 }}>مبلغ (USD)</label>
-        <div className="row" style={{ gap: 8 }}>
-          <input
-            className="input"
-            inputMode="decimal"
-            placeholder="مثلاً 10"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value.replace(",", "."))}
-            style={{ flex: 1 }}
-          />
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={fillAll}
-            disabled={balance <= 0}
-          >
-            همه موجودی
-          </button>
+        <div className="form-section">
+          <div className="field-label">مبلغ (USD)</div>
+          <div className="amount-field">
+            <span className="prefix">$</span>
+            <input
+              className="amount-input"
+              inputMode="decimal"
+              placeholder="0.00"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value.replace(",", "."))}
+            />
+          </div>
+          <div className="amount-helper">
+            <span>موجودی قابل برداشت</span>
+            <span className="balance-num">${fmt(String(balance), 4)}</span>
+          </div>
+          <div className="quick-amounts">
+            <button
+              type="button"
+              className="chip"
+              disabled={balance <= 0}
+              onClick={() => setQuickPercent(0.25)}
+            >
+              ۲۵٪
+            </button>
+            <button
+              type="button"
+              className="chip"
+              disabled={balance <= 0}
+              onClick={() => setQuickPercent(0.5)}
+            >
+              ۵۰٪
+            </button>
+            <button
+              type="button"
+              className="chip"
+              disabled={balance <= 0}
+              onClick={() => setQuickPercent(0.75)}
+            >
+              ۷۵٪
+            </button>
+            <button
+              type="button"
+              className="chip"
+              disabled={balance <= 0}
+              onClick={() => setQuickPercent(1)}
+            >
+              همه
+            </button>
+          </div>
         </div>
 
-        <label className="field-label" style={{ marginTop: 12 }}>آدرس مقصد (BSC / BEP-20)</label>
-        <input
-          className="input"
-          placeholder="0x…"
-          value={address}
-          onChange={(e) => setAddress(e.target.value.trim())}
-          dir="ltr"
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-        />
-        {address && !addrOk && (
-          <div className="alert alert-error mt-2">
-            آدرس BSC نامعتبر است.
+        <div className="form-section">
+          <div className="field-label">آدرس مقصد (BSC / BEP-20)</div>
+          <div
+            className={
+              "address-field" +
+              (addrInvalid ? " invalid" : addrOk ? " valid" : "")
+            }
+          >
+            <input
+              placeholder="0x…"
+              value={address}
+              onChange={(e) => setAddress(e.target.value.trim())}
+              dir="ltr"
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+            />
+            {addrOk && <span className="addr-icon ok">✓</span>}
+            {addrInvalid && <span className="addr-icon bad">!</span>}
+            <button
+              type="button"
+              className="paste-btn"
+              onClick={onPasteAddress}
+            >
+              چسباندن
+            </button>
           </div>
-        )}
-
-        <div className="mt-3" style={{ fontSize: 13 }}>
-          {quoting && (
-            <div className="row" style={{ gap: 8 }}>
-              <Skeleton width={140} height={14} />
+          {addrInvalid && (
+            <div className="alert alert-error mt-2">
+              آدرس BSC نامعتبر است.
             </div>
           )}
-          {!quoting && quote && (
-            <div>
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <span className="muted">کارمزد شبکه</span>
-                <b style={{ direction: "ltr" }}>{fmt(quote.fee_usd, 4)}$</b>
-              </div>
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <span className="muted">مبلغ دریافتی</span>
-                <b style={{ direction: "ltr" }}>{fmt(quote.net_usdt, 4)} USDT</b>
-              </div>
-              {parseFloat(quote.net_usdt) <= 0 && (
-                <div className="alert alert-error mt-2">
-                  کارمزد شبکه از مبلغ برداشت بیشتر است؛ لطفاً مبلغ بزرگ‌تری وارد کنید.
-                </div>
-              )}
+        </div>
+
+        <div className="form-section">
+          <div className="summary">
+            <div className="summary-row">
+              <span className="key">کارمزد شبکه</span>
+              <span className="val">
+                {quoting ? (
+                  <Skeleton width={80} height={14} />
+                ) : quote ? (
+                  <>${fmt(quote.fee_usd, 4)}</>
+                ) : (
+                  "—"
+                )}
+              </span>
+            </div>
+            <div className="summary-divider" />
+            <div className="summary-row">
+              <span className="key">مبلغ دریافتی</span>
+              <span className="val accent">
+                {quoting ? (
+                  <Skeleton width={100} height={14} />
+                ) : quote ? (
+                  <>{fmt(quote.net_usdt, 4)} USDT</>
+                ) : (
+                  "—"
+                )}
+              </span>
+            </div>
+          </div>
+          {quote && parseFloat(quote.net_usdt) <= 0 && (
+            <div className="alert alert-error mt-2">
+              کارمزد شبکه از مبلغ برداشت بیشتر است؛ لطفاً مبلغ بزرگ‌تری وارد کنید.
             </div>
           )}
         </div>
 
         <button
           type="button"
-          className="btn btn-primary mt-3"
+          className="btn btn-primary mt-4"
           disabled={!canSubmit}
           onClick={onSubmit}
         >
-          {submitting ? "در حال ارسال…" : "تأیید برداشت"}
+          {submitting ? (
+            <>
+              <Spinner />
+              <span>در حال ارسال…</span>
+            </>
+          ) : (
+            "تأیید برداشت"
+          )}
         </button>
       </div>
 
@@ -231,35 +328,41 @@ export function Withdraw() {
       {activeStatus && (
         <div className="card">
           <div className="title">وضعیت آخرین برداشت</div>
-          <div className="row mt-2" style={{ justifyContent: "space-between" }}>
-            <span className="muted">وضعیت</span>
-            <b>{STATUS_FA[activeStatus.status]}</b>
+          <div className={statusClass(activeStatus.status) + " mt-2"}>
+            <span className="dot" />
+            <span>{STATUS_FA[activeStatus.status]}</span>
           </div>
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <span className="muted">مبلغ</span>
-            <span style={{ direction: "ltr" }}>
-              {fmt(activeStatus.amount_usd, 4)}$ →{" "}
-              {fmt(activeStatus.net_usdt, 4)} USDT
-            </span>
-          </div>
-          {activeStatus.tx_hash && (
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <span className="muted">Tx</span>
-              <a
-                href={`https://bscscan.com/tx/${activeStatus.tx_hash}`}
-                target="_blank"
-                rel="noreferrer"
-                style={{
-                  direction: "ltr",
-                  fontFamily: "monospace",
-                  fontSize: 12,
-                }}
-              >
-                {activeStatus.tx_hash.slice(0, 10)}…
-                {activeStatus.tx_hash.slice(-6)}
-              </a>
+          <div className="summary mt-3">
+            <div className="summary-row">
+              <span className="key">مبلغ</span>
+              <span className="val">
+                ${fmt(activeStatus.amount_usd, 4)} →{" "}
+                {fmt(activeStatus.net_usdt, 4)} USDT
+              </span>
             </div>
-          )}
+            {activeStatus.tx_hash && (
+              <>
+                <div className="summary-divider" />
+                <div className="summary-row">
+                  <span className="key">Tx</span>
+                  <a
+                    href={`https://bscscan.com/tx/${activeStatus.tx_hash}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="val"
+                    style={{
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 12,
+                      color: "var(--accent)",
+                    }}
+                  >
+                    {activeStatus.tx_hash.slice(0, 10)}…
+                    {activeStatus.tx_hash.slice(-6)}
+                  </a>
+                </div>
+              </>
+            )}
+          </div>
           {activeStatus.error_msg && (
             <div className="alert alert-error mt-2">{activeStatus.error_msg}</div>
           )}
@@ -318,7 +421,19 @@ function AutoWithdrawSection({ defaultAddress }: { defaultAddress?: string }) {
     if (!cfg && defaultAddress && !address) setAddress(defaultAddress);
   }, [defaultAddress, cfg, address]);
 
-  const addrOk = ADDR_RE.test(address.trim());
+  const addrTrim = address.trim();
+  const addrOk = ADDR_RE.test(addrTrim);
+  const addrInvalid = address.length > 0 && !addrOk;
+
+  async function onPasteAddress() {
+    const txt = await pasteFromClipboard();
+    if (txt) {
+      setAddress(txt.trim());
+      haptic.light();
+    } else {
+      toast.info("دسترسی به کلیپ‌بورد در دسترس نیست.");
+    }
+  }
 
   async function onSave() {
     if (!addrOk) {
@@ -329,7 +444,7 @@ function AutoWithdrawSection({ defaultAddress }: { defaultAddress?: string }) {
       enabled,
       mode,
       amount_policy: policy,
-      to_address: address.trim(),
+      to_address: addrTrim,
       interval_hours: mode === "time" ? parseInt(intervalHours, 10) : null,
       threshold_usd: mode === "threshold" ? threshold : null,
       fixed_amount_usd: policy === "fixed" ? fixedAmount : null,
@@ -377,46 +492,48 @@ function AutoWithdrawSection({ defaultAddress }: { defaultAddress?: string }) {
 
   return (
     <div className="card">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <div className="title">برداشت خودکار</div>
-        <label className="row" style={{ gap: 6 }}>
+      <div className="auto-header">
+        <div>
+          <div className="title">برداشت خودکار</div>
+          <div className={"auto-state" + (enabled ? " on" : "")}>
+            {enabled ? "فعال" : "غیرفعال"}
+          </div>
+        </div>
+        <label className="switch" aria-label="فعال‌سازی برداشت خودکار">
           <input
             type="checkbox"
             checked={enabled}
             onChange={(e) => setEnabled(e.target.checked)}
           />
-          <span>{enabled ? "فعال" : "غیرفعال"}</span>
+          <span className="track" />
+          <span className="thumb" />
         </label>
       </div>
-      <p className="muted mt-1" style={{ fontSize: 12 }}>
+      <p className="muted mt-2" style={{ fontSize: 12 }}>
         می‌توانی به‌صورت زمانی یا بر اساس آستانهٔ موجودی، برداشت را خودکار کنی.
       </p>
 
-      <div className="mt-3">
+      <div className="form-section">
         <div className="field-label">حالت اجرا</div>
-        <div className="row" style={{ gap: 12, marginTop: 4 }}>
-          <label className="row" style={{ gap: 6 }}>
-            <input
-              type="radio"
-              name="mode"
-              checked={mode === "time"}
-              onChange={() => setMode("time")}
-            />
-            <span>زمانی</span>
-          </label>
-          <label className="row" style={{ gap: 6 }}>
-            <input
-              type="radio"
-              name="mode"
-              checked={mode === "threshold"}
-              onChange={() => setMode("threshold")}
-            />
-            <span>آستانه‌ای</span>
-          </label>
+        <div className="segmented" role="tablist">
+          <button
+            type="button"
+            className={mode === "time" ? "active" : ""}
+            onClick={() => setMode("time")}
+          >
+            زمانی
+          </button>
+          <button
+            type="button"
+            className={mode === "threshold" ? "active" : ""}
+            onClick={() => setMode("threshold")}
+          >
+            آستانه‌ای
+          </button>
         </div>
 
         {mode === "time" ? (
-          <div className="mt-2">
+          <div className="mt-3">
             <div className="field-label">هر چند ساعت یک‌بار؟</div>
             <input
               className="input"
@@ -429,7 +546,7 @@ function AutoWithdrawSection({ defaultAddress }: { defaultAddress?: string }) {
             />
           </div>
         ) : (
-          <div className="mt-2">
+          <div className="mt-3">
             <div className="field-label">وقتی موجودی به این مقدار رسید (USD)</div>
             <input
               className="input"
@@ -442,31 +559,27 @@ function AutoWithdrawSection({ defaultAddress }: { defaultAddress?: string }) {
         )}
       </div>
 
-      <div className="mt-3">
+      <div className="form-section">
         <div className="field-label">مبلغ هر اجرا</div>
-        <div className="row" style={{ gap: 12, marginTop: 4 }}>
-          <label className="row" style={{ gap: 6 }}>
-            <input
-              type="radio"
-              name="policy"
-              checked={policy === "full"}
-              onChange={() => setPolicy("full")}
-            />
-            <span>همه موجودی</span>
-          </label>
-          <label className="row" style={{ gap: 6 }}>
-            <input
-              type="radio"
-              name="policy"
-              checked={policy === "fixed"}
-              onChange={() => setPolicy("fixed")}
-            />
-            <span>مبلغ ثابت</span>
-          </label>
+        <div className="segmented">
+          <button
+            type="button"
+            className={policy === "full" ? "active" : ""}
+            onClick={() => setPolicy("full")}
+          >
+            همهٔ موجودی
+          </button>
+          <button
+            type="button"
+            className={policy === "fixed" ? "active" : ""}
+            onClick={() => setPolicy("fixed")}
+          >
+            مبلغ ثابت
+          </button>
         </div>
         {policy === "fixed" && (
           <input
-            className="input mt-2"
+            className="input mt-3"
             inputMode="decimal"
             value={fixedAmount}
             onChange={(e) => setFixedAmount(e.target.value.replace(",", "."))}
@@ -475,44 +588,57 @@ function AutoWithdrawSection({ defaultAddress }: { defaultAddress?: string }) {
         )}
       </div>
 
-      <div className="mt-3">
+      <div className="form-section">
         <div className="field-label">آدرس مقصد (BSC / BEP-20)</div>
-        <input
-          className="input"
-          placeholder="0x…"
-          value={address}
-          onChange={(e) => setAddress(e.target.value.trim())}
-          dir="ltr"
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-        />
-        {address && !addrOk && (
+        <div
+          className={
+            "address-field" +
+            (addrInvalid ? " invalid" : addrOk ? " valid" : "")
+          }
+        >
+          <input
+            placeholder="0x…"
+            value={address}
+            onChange={(e) => setAddress(e.target.value.trim())}
+            dir="ltr"
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+          />
+          {addrOk && <span className="addr-icon ok">✓</span>}
+          {addrInvalid && <span className="addr-icon bad">!</span>}
+          <button type="button" className="paste-btn" onClick={onPasteAddress}>
+            چسباندن
+          </button>
+        </div>
+        {addrInvalid && (
           <div className="alert alert-error mt-2">آدرس BSC نامعتبر است.</div>
         )}
       </div>
 
       {cfg?.enabled && (
-        <div className="mt-3" style={{ fontSize: 12 }} dir="rtl">
+        <div className="info-chips">
           {cfg.mode === "time" && cfg.next_run_at && (
-            <div className="muted">
-              اجرای بعدی: {new Date(cfg.next_run_at).toLocaleString("fa-IR")}
-            </div>
+            <span className="info-chip">
+              اجرای بعدی:{" "}
+              <b>{new Date(cfg.next_run_at).toLocaleString("fa-IR")}</b>
+            </span>
           )}
           {cfg.mode === "threshold" && cfg.threshold_usd && (
-            <div className="muted">
-              منتظر رسیدن موجودی به {fmt(cfg.threshold_usd, 2)}$
-            </div>
+            <span className="info-chip">
+              منتظر موجودی: <b>${fmt(cfg.threshold_usd, 2)}</b>
+            </span>
           )}
           {cfg.last_run_at && (
-            <div className="muted">
-              آخرین اجرا: {new Date(cfg.last_run_at).toLocaleString("fa-IR")}
-            </div>
+            <span className="info-chip">
+              آخرین اجرا:{" "}
+              <b>{new Date(cfg.last_run_at).toLocaleString("fa-IR")}</b>
+            </span>
           )}
         </div>
       )}
 
-      <div className="row mt-3" style={{ gap: 8 }}>
+      <div className="row mt-4" style={{ gap: 8 }}>
         <button
           type="button"
           className="btn btn-primary"
@@ -520,14 +646,15 @@ function AutoWithdrawSection({ defaultAddress }: { defaultAddress?: string }) {
           onClick={onSave}
           style={{ flex: 1 }}
         >
-          {saving ? "…" : "ذخیره"}
+          {saving ? <Spinner /> : "ذخیره"}
         </button>
         {cfg?.enabled && (
           <button
             type="button"
-            className="btn btn-ghost"
+            className="btn btn-secondary"
             onClick={onDisable}
             disabled={saving}
+            style={{ flex: 1 }}
           >
             غیرفعال‌سازی
           </button>
