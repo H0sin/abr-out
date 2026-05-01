@@ -14,6 +14,7 @@ import { AdminUserDetail } from "./pages/admin/UserDetail";
 import { AdminUserTransactions } from "./pages/admin/UserTransactions";
 import { AdminBroadcast } from "./pages/admin/Broadcast";
 import { AdminSupport } from "./pages/admin/Support";
+import { AdminWithdrawalWallet } from "./pages/admin/WithdrawalWallet";
 import { ToastProvider } from "./lib/toast";
 import { MeProvider } from "./lib/MeContext";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -135,6 +136,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                   />
                   <Route path="broadcast" element={<AdminBroadcast />} />
                   <Route path="support" element={<AdminSupport />} />
+                  <Route path="wallet" element={<AdminWithdrawalWallet />} />
                 </Route>
               </Route>
             </Routes>

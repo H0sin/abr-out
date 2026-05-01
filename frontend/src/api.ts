@@ -371,6 +371,45 @@ export type SupportEntry = {
   created_at: string;
 };
 
+export type WalletSummary = {
+  configured: boolean;
+  address: string | null;
+  network: string;
+  usdt_contract: string;
+  usdt_balance: string;
+  bnb_balance: string;
+  bnb_balance_wei: number;
+  bnb_price_usd: string;
+  bnb_balance_usd: string;
+};
+
+export type WalletTx = {
+  hash: string;
+  asset: "USDT" | "BNB";
+  direction: "in" | "out" | "self";
+  from: string;
+  to: string;
+  amount: string;
+  timestamp: number | null;
+  block: number;
+  status: "success" | "failed" | "unknown";
+  explorer_url: string;
+};
+
+export type WalletTxPage = {
+  items: WalletTx[];
+  page: number;
+  size: number;
+  source: "bscscan" | "rpc" | "none";
+  note: string | null;
+};
+
+export type WalletTxFilter = {
+  asset?: "all" | "usdt" | "bnb";
+  page?: number;
+  size?: number;
+};
+
 export const adminApi = {
   listUsers: (f: AdminUserFilter = {}) =>
     request<AdminUsersPage>(
@@ -440,4 +479,10 @@ export const adminApi = {
       method: "POST",
       body: JSON.stringify({ text }),
     }),
+  getWalletSummary: () => request<WalletSummary>("/api/admin/wallet/summary"),
+  listWalletTxs: (f: WalletTxFilter = {}) =>
+    request<WalletTxPage>(
+      "/api/admin/wallet/transactions" +
+        qs({ asset: f.asset, page: f.page, size: f.size }),
+    ),
 };

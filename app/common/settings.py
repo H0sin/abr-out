@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     bnb_price_feed_url: str = (
         "https://api.binance.com/api/v3/ticker/price?symbol=BNBUSDT"
     )
+    # BscScan API for the admin "withdrawal wallet" view (read-only on-chain
+    # transaction history). Empty key falls back to RPC eth_getLogs scanning.
+    bscscan_api_key: str = ""
+    bscscan_base_url: str = "https://api.bscscan.com/api"
 
     # Public URL settings.
     # Set DOMAIN to your Cloudflare-fronted domain (e.g. example.com).

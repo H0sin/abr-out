@@ -30,6 +30,9 @@ from app.common.db.models import (
 )
 from app.common.db.session import SessionLocal
 from app.common.logging import logger
+from app.common.payout.bsc import PayoutConfigError, get_payout_client
+from app.common.payout.bscscan import BscScanError, get_bscscan_client
+from app.common.settings import get_settings
 from app.common.telegram_bot import send_message
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -605,3 +608,267 @@ async def reply_support(
         f"📩 <b>پاسخ پشتیبانی:</b>\n{escape(body.text)}",
     )
     return {"ok": bool(resp and resp.get("ok"))}
+
+
+# ---------- Withdrawal hot wallet (admin-only on-chain view) ----------
+
+
+class WalletSummary(BaseModel):
+    """Snapshot of the hot wallet straight from the chain.
+
+    Independent from the bot's internal user balances — this is the literal
+    BSC wallet that funds withdrawals (USDT BEP20 + BNB for gas).
+    """
+
+    configured: bool
+    address: str | None
+    network: str
+    usdt_contract: str
+    usdt_balance: Decimal
+    bnb_balance: Decimal
+    bnb_balance_wei: int
+    bnb_price_usd: Decimal
+    bnb_balance_usd: Decimal
+
+
+class WalletTx(BaseModel):
+    hash: str
+    asset: Literal["USDT", "BNB"]
+    direction: Literal["in", "out", "self"]
+    from_address: str = Field(alias="from")
+    to_address: str = Field(alias="to")
+    amount: Decimal
+    timestamp: int | None
+    block: int
+    status: Literal["success", "failed", "unknown"] = "success"
+    explorer_url: str
+
+    model_config = {"populate_by_name": True}
+
+
+class WalletTxPage(BaseModel):
+    items: list[WalletTx]
+    page: int
+    size: int
+    source: Literal["bscscan", "rpc", "none"]
+    note: str | None = None
+
+
+def _explorer_tx_url(tx_hash: str) -> str:
+    h = tx_hash if tx_hash.startswith("0x") else f"0x{tx_hash}"
+    return f"https://bscscan.com/tx/{h}"
+
+
+def _direction(addr: str, frm: str, to: str) -> Literal["in", "out", "self"]:
+    a = addr.lower()
+    f = (frm or "").lower()
+    t = (to or "").lower()
+    if f == a and t == a:
+        return "self"
+    if f == a:
+        return "out"
+    return "in"
+
+
+def _bscscan_native_to_tx(addr: str, item: dict) -> WalletTx | None:
+    try:
+        value = Decimal(str(item.get("value", "0"))) / Decimal(10**18)
+        ts = int(item.get("timeStamp", 0) or 0)
+        block = int(item.get("blockNumber", 0) or 0)
+        is_error = str(item.get("isError", "0")) == "1"
+        h = str(item.get("hash", "") or "")
+        frm = str(item.get("from", "") or "")
+        to = str(item.get("to", "") or "")
+    except Exception:
+        return None
+    return WalletTx(
+        hash=h,
+        asset="BNB",
+        direction=_direction(addr, frm, to),
+        from_address=frm,
+        to_address=to,
+        amount=value.quantize(Decimal("0.00000001")),
+        timestamp=ts or None,
+        block=block,
+        status="failed" if is_error else "success",
+        explorer_url=_explorer_tx_url(h),
+    )
+
+
+def _bscscan_token_to_tx(addr: str, item: dict) -> WalletTx | None:
+    try:
+        decimals = int(item.get("tokenDecimal", 18) or 18)
+        raw = Decimal(str(item.get("value", "0")))
+        amount = raw / Decimal(10**decimals)
+        ts = int(item.get("timeStamp", 0) or 0)
+        block = int(item.get("blockNumber", 0) or 0)
+        h = str(item.get("hash", "") or "")
+        frm = str(item.get("from", "") or "")
+        to = str(item.get("to", "") or "")
+    except Exception:
+        return None
+    return WalletTx(
+        hash=h,
+        asset="USDT",
+        direction=_direction(addr, frm, to),
+        from_address=frm,
+        to_address=to,
+        amount=amount.quantize(Decimal("0.00000001")),
+        timestamp=ts or None,
+        block=block,
+        status="success",
+        explorer_url=_explorer_tx_url(h),
+    )
+
+
+@router.get("/wallet/summary", response_model=WalletSummary)
+async def wallet_summary(_: User = Depends(current_admin)) -> WalletSummary:
+    settings = get_settings()
+    client = get_payout_client()
+    try:
+        address = client.hot_wallet_address
+    except PayoutConfigError:
+        return WalletSummary(
+            configured=False,
+            address=None,
+            network="BSC (BEP20)",
+            usdt_contract=settings.bsc_usdt_contract,
+            usdt_balance=Decimal(0),
+            bnb_balance=Decimal(0),
+            bnb_balance_wei=0,
+            bnb_price_usd=Decimal(0),
+            bnb_balance_usd=Decimal(0),
+        )
+
+    from app.common.payout.bsc import _get_bnb_usd_price  # local import to avoid cycle
+
+    usdt_bal = await client.usdt_balance()
+    bnb_wei = await client.bnb_balance_wei()
+    bnb_balance = (Decimal(bnb_wei) / Decimal(10**18)).quantize(
+        Decimal("0.00000001")
+    )
+    try:
+        bnb_price = await _get_bnb_usd_price(settings.bnb_price_feed_url)
+    except Exception:
+        bnb_price = Decimal(0)
+    bnb_usd = (bnb_balance * bnb_price).quantize(Decimal("0.01"))
+    return WalletSummary(
+        configured=True,
+        address=address,
+        network="BSC (BEP20)",
+        usdt_contract=settings.bsc_usdt_contract,
+        usdt_balance=usdt_bal,
+        bnb_balance=bnb_balance,
+        bnb_balance_wei=int(bnb_wei),
+        bnb_price_usd=bnb_price,
+        bnb_balance_usd=bnb_usd,
+    )
+
+
+@router.get("/wallet/transactions", response_model=WalletTxPage)
+async def wallet_transactions(
+    _: User = Depends(current_admin),
+    asset: Literal["all", "usdt", "bnb"] = "all",
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=25, ge=1, le=100),
+) -> WalletTxPage:
+    """Live on-chain transaction history for the hot wallet.
+
+    Source priority:
+      1. BscScan API (preferred — supports both native BNB and BEP20 USDT)
+      2. RPC ``eth_getLogs`` fallback (USDT only)
+    """
+    import asyncio as _asyncio
+
+    settings = get_settings()
+    client = get_payout_client()
+    try:
+        address = client.hot_wallet_address
+    except PayoutConfigError:
+        return WalletTxPage(
+            items=[],
+            page=page,
+            size=size,
+            source="none",
+            note="کلید خصوصی هات‌ولت تنظیم نشده است.",
+        )
+
+    bscscan = get_bscscan_client()
+    items: list[WalletTx] = []
+
+    if bscscan.configured:
+        try:
+            token_task = (
+                bscscan.list_token_txs(
+                    address, settings.bsc_usdt_contract, page=page, offset=size
+                )
+                if asset in ("all", "usdt")
+                else _asyncio.sleep(0, result=[])
+            )
+            native_task = (
+                bscscan.list_native_txs(address, page=page, offset=size)
+                if asset in ("all", "bnb")
+                else _asyncio.sleep(0, result=[])
+            )
+            token_raw, native_raw = await _asyncio.gather(token_task, native_task)
+            for raw in token_raw:
+                tx = _bscscan_token_to_tx(address, raw)
+                if tx is not None:
+                    items.append(tx)
+            for raw in native_raw:
+                tx = _bscscan_native_to_tx(address, raw)
+                if tx is not None:
+                    items.append(tx)
+            items.sort(key=lambda t: (t.timestamp or 0, t.block), reverse=True)
+            items = items[:size]
+            return WalletTxPage(items=items, page=page, size=size, source="bscscan")
+        except BscScanError as exc:
+            logger.warning("[admin/wallet] BscScan failed, falling back to RPC: {}", exc)
+
+    # ---- RPC fallback (USDT transfers only) ----
+    if asset == "bnb":
+        return WalletTxPage(
+            items=[],
+            page=page,
+            size=size,
+            source="rpc",
+            note="مشاهدهٔ تراکنش‌های BNB بدون کلید BscScan در دسترس نیست.",
+        )
+    try:
+        events = await client.list_recent_token_transfers(
+            lookback_blocks=200_000, limit=size
+        )
+    except Exception as exc:
+        logger.warning("[admin/wallet] RPC fallback failed: {}", exc)
+        return WalletTxPage(
+            items=[],
+            page=page,
+            size=size,
+            source="rpc",
+            note="دریافت تراکنش‌ها از شبکه ناموفق بود.",
+        )
+    for e in events:
+        h = str(e["hash"])
+        if not h.startswith("0x"):
+            h = "0x" + h
+        items.append(
+            WalletTx(
+                hash=h,
+                asset="USDT",
+                direction=_direction(address, e["from"], e["to"]),
+                from_address=e["from"],
+                to_address=e["to"],
+                amount=e["amount"],
+                timestamp=e.get("timestamp"),
+                block=e["block"],
+                status="success",
+                explorer_url=_explorer_tx_url(h),
+            )
+        )
+    note = (
+        "بدون کلید BscScan فقط تراکنش‌های USDT نمایش داده می‌شوند."
+        if asset == "all"
+        else None
+    )
+    return WalletTxPage(items=items, page=page, size=size, source="rpc", note=note)
+

@@ -309,6 +309,114 @@ class BscPayoutClient:
     def hot_wallet_address(self) -> str:
         return self._acct().address
 
+    # ----- read-only history (RPC fallback for admin wallet view) -----
+
+    async def list_recent_token_transfers(
+        self, lookback_blocks: int = 100_000, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Return recent USDT transfers touching the hot wallet via ``eth_getLogs``.
+
+        Each item is a dict with keys: ``hash``, ``from``, ``to``, ``amount``
+        (Decimal), ``block``, ``timestamp`` (int seconds, best-effort), and
+        ``log_index``. Sorted newest-first. Used as a fallback when BscScan
+        is unavailable.
+        """
+        return await asyncio.to_thread(
+            self._list_recent_token_transfers_sync, lookback_blocks, limit
+        )
+
+    def _list_recent_token_transfers_sync(
+        self, lookback_blocks: int, limit: int
+    ) -> list[dict[str, Any]]:
+        w3 = self._w3_inst()
+        try:
+            addr = self._acct().address
+        except PayoutConfigError:
+            return []
+        contract_addr = Web3.to_checksum_address(self._settings.bsc_usdt_contract)
+        # keccak256("Transfer(address,address,uint256)")
+        transfer_topic = (
+            "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+        )
+        try:
+            head = int(w3.eth.block_number)
+        except Exception as exc:
+            logger.warning("[BscPayout] block_number failed: {}", exc)
+            return []
+        from_block = max(0, head - max(1, int(lookback_blocks)))
+        addr_topic = "0x" + addr.lower().replace("0x", "").rjust(64, "0")
+        decimals = self._usdt_decimals()
+        scale = Decimal(10**decimals)
+
+        events: list[dict[str, Any]] = []
+        # Two queries: outgoing (topic1==addr) + incoming (topic2==addr).
+        for topics in (
+            [transfer_topic, addr_topic, None],
+            [transfer_topic, None, addr_topic],
+        ):
+            try:
+                logs = w3.eth.get_logs(
+                    {
+                        "fromBlock": from_block,
+                        "toBlock": "latest",
+                        "address": contract_addr,
+                        "topics": topics,
+                    }
+                )
+            except Exception as exc:
+                logger.warning("[BscPayout] eth_getLogs failed: {}", exc)
+                continue
+            for lg in logs:
+                try:
+                    raw_topics = lg["topics"]
+                    frm = "0x" + raw_topics[1].hex()[-40:]
+                    to = "0x" + raw_topics[2].hex()[-40:]
+                    data_hex = lg["data"]
+                    if hasattr(data_hex, "hex"):
+                        data_hex = data_hex.hex()
+                    raw_amount = int(data_hex, 16) if data_hex else 0
+                    block_num = int(lg["blockNumber"])
+                    events.append(
+                        {
+                            "hash": lg["transactionHash"].hex()
+                            if hasattr(lg["transactionHash"], "hex")
+                            else str(lg["transactionHash"]),
+                            "from": Web3.to_checksum_address(frm),
+                            "to": Web3.to_checksum_address(to),
+                            "amount": (Decimal(raw_amount) / scale).quantize(
+                                Decimal("0.00000001"), rounding=ROUND_DOWN
+                            ),
+                            "block": block_num,
+                            "log_index": int(lg.get("logIndex", 0) or 0),
+                            "timestamp": None,
+                        }
+                    )
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning("[BscPayout] log parse failed: {}", exc)
+                    continue
+
+        # Dedupe by (hash, log_index) — incoming/outgoing self-transfers
+        # would otherwise appear twice.
+        seen: set[tuple[str, int]] = set()
+        unique: list[dict[str, Any]] = []
+        for e in events:
+            k = (e["hash"], e["log_index"])
+            if k in seen:
+                continue
+            seen.add(k)
+            unique.append(e)
+        unique.sort(key=lambda e: (e["block"], e["log_index"]), reverse=True)
+        unique = unique[: max(1, int(limit))]
+
+        # Best-effort timestamp lookup for the small page we're returning.
+        for e in unique:
+            try:
+                blk = w3.eth.get_block(e["block"])
+                e["timestamp"] = int(blk["timestamp"])
+            except Exception:
+                e["timestamp"] = None
+        return unique
+
 
 async def _get_bnb_usd_price(url: str) -> Decimal:
     """Fetch BNB/USDT spot price from the configured ticker URL. Cached 60s.

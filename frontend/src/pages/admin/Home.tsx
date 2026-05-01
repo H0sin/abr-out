@@ -3,6 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 export function AdminHome() {
   const cards = [
     { to: "/admin/users", emoji: "👥", title: "کاربران", desc: "لیست، فیلتر، مدیریت" },
+    { to: "/admin/wallet", emoji: "💼", title: "کیف پول برداشت", desc: "موجودی و تراکنش‌های شبکه (BSC)" },
     { to: "/admin/broadcast", emoji: "📣", title: "پیام همگانی", desc: "ارسال با فیلتر مخاطب" },
     { to: "/admin/support", emoji: "📨", title: "پشتیبانی", desc: "پاسخ به پیام‌های کاربران" },
   ];
