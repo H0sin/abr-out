@@ -23,16 +23,28 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "config_usage",
-        sa.Column(
-            "seller_credit_usd",
-            sa.Numeric(20, 8),
-            nullable=False,
-            server_default="0",
-        ),
-    )
+    # ``config_usage.seller_credit_usd`` is already created by migration 0004
+    # for fresh databases. This migration only needs to add the column on
+    # legacy databases where it is missing, so we guard it with an inspector
+    # check to keep the upgrade idempotent.
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing = {col["name"] for col in inspector.get_columns("config_usage")}
+    if "seller_credit_usd" not in existing:
+        op.add_column(
+            "config_usage",
+            sa.Column(
+                "seller_credit_usd",
+                sa.Numeric(20, 8),
+                nullable=False,
+                server_default="0",
+            ),
+        )
 
 
 def downgrade() -> None:
-    op.drop_column("config_usage", "seller_credit_usd")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing = {col["name"] for col in inspector.get_columns("config_usage")}
+    if "seller_credit_usd" in existing:
+        op.drop_column("config_usage", "seller_credit_usd")
