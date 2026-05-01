@@ -284,29 +284,98 @@ class XuiClient:
         return snap.clients
 
     async def get_inbound_snapshot(self, inbound_id: int) -> InboundSnapshot:
-        """One round-trip: panel-level up/down + ``clientStats[]`` for an inbound.
+        """Panel-level up/down + per-client traffic for an inbound.
 
         Used by the traffic poller to bill the seller (outbound totals) and
         the buyers (per-client totals) from the same point-in-time read.
+
+        Some 3x-ui versions return ``clientStats: null`` from
+        ``/panel/api/inbounds/get/{id}`` even when clients exist. To stay
+        robust we:
+
+        1. Read the inbound via ``get/{id}`` (cheap, gives ``up``/``down``
+           and the ``settings.clients`` list with emails).
+        2. If ``clientStats`` is missing/empty but the inbound has clients,
+           fall back to per-client ``getClientTraffics/{email}`` lookups.
         """
         inbound = await self._request(
             "GET", f"/panel/api/inbounds/get/{inbound_id}"
         )
         obj = inbound.get("obj") or {}
-        clients = [
+
+        client_stats = obj.get("clientStats") or []
+        clients: list[ClientTraffic] = [
             ClientTraffic(
                 email=t.get("email", ""),
                 up=int(t.get("up", 0)),
                 down=int(t.get("down", 0)),
             )
-            for t in (obj.get("clientStats") or [])
+            for t in client_stats
+            if t.get("email")
         ]
+
+        if not clients:
+            # Fallback: parse the inbound's own settings.clients for emails
+            # and fetch each client's traffic via getClientTraffics/{email}.
+            emails: list[str] = []
+            settings_raw = obj.get("settings")
+            if isinstance(settings_raw, str) and settings_raw:
+                try:
+                    settings_obj = json.loads(settings_raw)
+                except (TypeError, ValueError):
+                    settings_obj = {}
+                for c in settings_obj.get("clients") or []:
+                    em = c.get("email")
+                    if em:
+                        emails.append(em)
+            if emails:
+                logger.warning(
+                    "[xui] inbound={} clientStats empty; falling back to "
+                    "getClientTraffics for {} client(s)",
+                    inbound_id,
+                    len(emails),
+                )
+            for em in emails:
+                ct = await self._get_client_traffic_by_email(em)
+                if ct is not None:
+                    clients.append(ct)
+
         return InboundSnapshot(
             inbound_id=int(obj.get("id", inbound_id)),
             up=int(obj.get("up", 0)),
             down=int(obj.get("down", 0)),
             enable=bool(obj.get("enable", True)),
             clients=clients,
+        )
+
+    async def _get_client_traffic_by_email(
+        self, email: str
+    ) -> ClientTraffic | None:
+        """Fetch a single client's traffic counters by email.
+
+        Endpoint: ``GET /panel/api/inbounds/getClientTraffics/{email}``.
+        Returns ``None`` if the panel has no traffic record yet for that
+        email (treated as zero traffic by callers).
+        """
+        from urllib.parse import quote
+
+        try:
+            body = await self._request(
+                "GET",
+                f"/panel/api/inbounds/getClientTraffics/{quote(email, safe='')}",
+            )
+        except XuiError as e:
+            logger.warning(
+                "[xui] getClientTraffics email={} failed: {!r}", email, e
+            )
+            return None
+        obj = body.get("obj")
+        if not obj:
+            return ClientTraffic(email=email, up=0, down=0)
+        return ClientTraffic(
+            email=obj.get("email", email),
+            up=int(obj.get("up", 0)),
+            down=int(obj.get("down", 0)),
         )
 
     async def reset_inbound_clients_traffic(self, inbound_id: int) -> None:
