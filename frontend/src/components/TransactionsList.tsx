@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   api,
   adminApi,
@@ -23,7 +23,6 @@ const TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: "topup", label: TYPE_FA.topup },
   { value: "usage_debit", label: TYPE_FA.usage_debit },
   { value: "usage_credit", label: TYPE_FA.usage_credit },
-  { value: "commission", label: TYPE_FA.commission },
   { value: "refund", label: TYPE_FA.refund },
   { value: "payout", label: TYPE_FA.payout },
   { value: "adjustment", label: TYPE_FA.adjustment },
@@ -138,6 +137,18 @@ export function TransactionsList({ adminUserId }: TransactionsListProps) {
     [adminUserId, JSON.stringify(filter)],
   );
 
+  // Auto-refetch when the WebApp becomes visible again (e.g. user reopens
+  // the mini-app after an admin posts a manual transaction in the bot).
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState === "visible") {
+        refetch();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [refetch]);
+
   function toggleType(v: string) {
     setSelectedTypes((cur) => {
       const next = new Set(cur);
@@ -242,6 +253,14 @@ export function TransactionsList({ adminUserId }: TransactionsListProps) {
           </label>
           <button className="btn-ghost" type="button" onClick={reset}>
             ریست
+          </button>
+          <button
+            className="btn-ghost"
+            type="button"
+            onClick={() => refetch()}
+            disabled={loading}
+          >
+            بروزرسانی
           </button>
         </div>
       </div>

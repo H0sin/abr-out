@@ -2,7 +2,13 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
 import { ApiError, Config, Listing, api, topupDeepLink } from "../api";
-import { EmptyState, Modal, PingPill, SkeletonCard } from "../components/ui";
+import {
+  EmptyState,
+  Modal,
+  PingCircle,
+  SkeletonCard,
+  StabilityPct,
+} from "../components/ui";
 import { CopyIcon, RefreshIcon } from "../components/icons";
 import { useResource } from "../lib/useApi";
 import { useToast } from "../lib/toast";
@@ -102,7 +108,8 @@ export function Browse() {
 
       {sorted?.map((l) => (
         <article key={l.id} className="card">
-          <div className="row" style={{ alignItems: "flex-start" }}>
+          <div className="row" style={{ alignItems: "center", gap: 12 }}>
+            <PingCircle ms={l.avg_ping_ms} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div
                 className="title"
@@ -114,11 +121,17 @@ export function Browse() {
               >
                 اوت‌باند <span className="num">#{l.id}</span>
               </div>
-              <div className="row gap-2 mt-2" style={{ justifyContent: "flex-start" }}>
-                <PingPill ms={l.avg_ping_ms} />
-                <span className="badge">
-                  <span className="num">{l.sales_count}</span> فروش
+              <div
+                className="row gap-2 mt-2"
+                style={{ justifyContent: "flex-start", flexWrap: "wrap" }}
+              >
+                <span className="stat-pill" title="ترافیک فروخته‌شده (کل)">
+                  کل <span className="num">{l.total_gb_sold.toFixed(1)}</span> GB
                 </span>
+                <span className="stat-pill" title="ترافیک ۲۴ ساعت اخیر">
+                  ۲۴س <span className="num">{l.gb_sold_24h.toFixed(2)}</span> GB
+                </span>
+                <StabilityPct pct={l.stability_pct} />
               </div>
             </div>
             <div className="price-tag">

@@ -39,6 +39,16 @@ export function MeProvider({ children }: { children: ReactNode }) {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState === "visible") {
+        refresh();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [refresh]);
+
   return (
     <MeCtx.Provider value={{ me, loading, error, refresh }}>
       {children}

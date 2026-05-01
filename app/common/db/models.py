@@ -319,6 +319,9 @@ class ConfigUsage(Base):
     buyer_debit_usd: Mapped[Decimal] = mapped_column(
         Numeric(20, 8), nullable=False
     )
+    seller_credit_usd: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), nullable=False, server_default="0"
+    )
     panel_email: Mapped[str] = mapped_column(String(128), nullable=False)
     reset_attempted: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False

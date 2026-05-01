@@ -53,7 +53,6 @@ from app.common.db.models import (
     ConfigUsage,
     Listing,
     ListingStatus,
-    OutboundUsage,
     TxnType,
     WalletTransaction,
 )
@@ -86,78 +85,36 @@ async def _bill_inbound(
     snap: InboundSnapshot,
     cycle_id: uuid.UUID,
     sampled_at: datetime,
-    admin_id: int | None,
     commission_pct: Decimal,
     reset_attempted: bool,
     reset_succeeded: bool,
 ) -> bool:
-    """Insert usage + wallet rows for one inbound and update anchors.
+    """Insert per-config usage + paired wallet rows and update anchors.
 
-    The caller has already attempted (or skipped) the panel-side reset; the
-    outcome is passed in via ``reset_attempted``/``reset_succeeded`` so this
-    function can set ``Config.last_snapshot_bytes`` to 0 (reset OK) or to
-    the just-observed total (reset failed/skipped, next cycle must diff).
+    Billing is driven entirely by per-client (buyer config) deltas. For each
+    client with traffic we insert exactly two wallet rows in the same DB
+    transaction: a ``usage_debit`` on the buyer for
+    ``gb × price × (1 + commission_pct)`` and a ``usage_credit`` on the
+    seller for ``gb × price``. The surcharge difference is implicit
+    platform profit and is **not** booked anywhere — no ``commission`` row
+    is created. The inbound-level (``snap.up`` / ``snap.down``) totals are
+    no longer billed; the ``last_outbound_*_bytes`` anchors on the listing
+    are still advanced so they don't grow stale.
 
     Returns ``True`` if any usage row was inserted.
     """
-    # --- outbound (seller credit) ---
-    delta_up = snap.up - listing.last_outbound_up_bytes
-    delta_down = snap.down - listing.last_outbound_down_bytes
-    if delta_up < 0 or delta_down < 0:
-        logger.warning(
-            "[poll] listing={} panel-side outbound reset detected "
-            "(prev_up={}, prev_down={}, now_up={}, now_down={}); "
-            "treating delta=current",
-            listing.id,
-            listing.last_outbound_up_bytes,
-            listing.last_outbound_down_bytes,
-            snap.up,
-            snap.down,
-        )
-        delta_up = snap.up
-        delta_down = snap.down
-    delta_total = delta_up + delta_down
+    # Advance the inbound-level anchors (informational only — not billed).
+    if snap.up >= listing.last_outbound_up_bytes:
+        listing.last_outbound_up_bytes = snap.up
+    else:
+        # Panel-side reset detected; resync to current.
+        listing.last_outbound_up_bytes = snap.up
+    if snap.down >= listing.last_outbound_down_bytes:
+        listing.last_outbound_down_bytes = snap.down
+    else:
+        listing.last_outbound_down_bytes = snap.down
 
-    seller_credit = ZERO
-    had_outbound = delta_total > 0
-    if had_outbound:
-        gb = _q_gb(Decimal(delta_total) / _BYTES_PER_GB)
-        seller_credit = _q_usd(gb * listing.price_per_gb_usd)
-        session.add(
-            OutboundUsage(
-                listing_id=listing.id,
-                seller_user_id=listing.seller_user_id,
-                panel_inbound_id=snap.inbound_id,
-                cycle_id=cycle_id,
-                delta_up_bytes=delta_up,
-                delta_down_bytes=delta_down,
-                delta_total_bytes=delta_total,
-                gb=gb,
-                seller_credit_usd=seller_credit,
-                panel_total_up_bytes=snap.up,
-                panel_total_down_bytes=snap.down,
-                reset_attempted=reset_attempted,
-                reset_succeeded=reset_succeeded,
-                sampled_at=sampled_at,
-            )
-        )
-        if seller_credit > 0:
-            session.add(
-                WalletTransaction(
-                    user_id=listing.seller_user_id,
-                    amount=seller_credit,
-                    type=TxnType.usage_credit,
-                    ref=f"listing:{listing.id}",
-                    note=f"outbound {delta_total}B @ {listing.price_per_gb_usd}/GB",
-                    idempotency_key=f"poll:{cycle_id}:outbound:{listing.id}",
-                )
-            )
-
-    # Always advance the diff anchor.
-    listing.last_outbound_up_bytes = snap.up
-    listing.last_outbound_down_bytes = snap.down
-
-    # --- per-config (buyer debits) ---
+    # --- per-config (paired buyer debit + seller credit) ---
     cfg_rows = (
         await session.execute(
             select(Config).where(
@@ -168,8 +125,7 @@ async def _bill_inbound(
     ).scalars().all()
     by_email: dict[str, Config] = {c.panel_client_email: c for c in cfg_rows}
 
-    total_buyer_debit = ZERO
-    had_config = False
+    had_traffic = False
     for ct in snap.clients:
         cfg = by_email.get(ct.email)
         if cfg is None:
@@ -191,8 +147,9 @@ async def _bill_inbound(
             )
             delta = current_total
         if delta > 0:
-            had_config = True
+            had_traffic = True
             gb = _q_gb(Decimal(delta) / _BYTES_PER_GB)
+            seller_credit_abs = _q_usd(gb * listing.price_per_gb_usd)
             buyer_debit_abs = _q_usd(
                 gb * listing.price_per_gb_usd * (Decimal("1") + commission_pct)
             )
@@ -215,11 +172,16 @@ async def _bill_inbound(
                     delta_total_bytes=delta,
                     gb=gb,
                     buyer_debit_usd=buyer_debit_abs,
+                    seller_credit_usd=seller_credit_abs,
                     panel_email=ct.email,
                     reset_attempted=reset_attempted,
                     reset_succeeded=reset_succeeded,
                     sampled_at=sampled_at,
                 )
+            )
+            note = (
+                f"usage {delta}B @ {listing.price_per_gb_usd}/GB "
+                f"+{commission_pct}"
             )
             if buyer_debit_abs > 0:
                 session.add(
@@ -228,14 +190,21 @@ async def _bill_inbound(
                         amount=-buyer_debit_abs,
                         type=TxnType.usage_debit,
                         ref=f"config:{cfg.id}",
-                        note=(
-                            f"usage {delta}B @ {listing.price_per_gb_usd}/GB "
-                            f"+{commission_pct}"
-                        ),
-                        idempotency_key=f"poll:{cycle_id}:config:{cfg.id}",
+                        note=note,
+                        idempotency_key=f"poll:{cycle_id}:debit:{cfg.id}",
                     )
                 )
-                total_buyer_debit += buyer_debit_abs
+            if seller_credit_abs > 0:
+                session.add(
+                    WalletTransaction(
+                        user_id=listing.seller_user_id,
+                        amount=seller_credit_abs,
+                        type=TxnType.usage_credit,
+                        ref=f"config:{cfg.id}",
+                        note=note,
+                        idempotency_key=f"poll:{cycle_id}:credit:{cfg.id}",
+                    )
+                )
 
         # Update anchor regardless of whether delta > 0:
         # - reset succeeded => panel at 0, anchor = 0
@@ -243,32 +212,7 @@ async def _bill_inbound(
         #   bills via diff (next_total - current_total) and avoids double-count
         cfg.last_snapshot_bytes = 0 if reset_succeeded else current_total
 
-    # --- commission (admin) ---
-    if admin_id is not None and (had_outbound or had_config):
-        commission = _q_usd(total_buyer_debit - seller_credit)
-        if commission != ZERO:
-            session.add(
-                WalletTransaction(
-                    user_id=admin_id,
-                    amount=commission,
-                    type=TxnType.commission,
-                    ref=f"listing:{listing.id}",
-                    note=(
-                        f"buyer_debits={total_buyer_debit} "
-                        f"seller_credit={seller_credit}"
-                    ),
-                    idempotency_key=f"poll:{cycle_id}:commission:{listing.id}",
-                )
-            )
-            if commission < 0:
-                logger.warning(
-                    "[poll] listing={} negative commission={} "
-                    "(seller credit exceeds attributed buyer debits)",
-                    listing.id,
-                    commission,
-                )
-
-    return had_outbound or had_config
+    return had_traffic
 
 
 async def _process_listing(
@@ -277,7 +221,6 @@ async def _process_listing(
     listing_id: int,
     cycle_id: uuid.UUID,
     sampled_at: datetime,
-    admin_id: int | None,
     commission_pct: Decimal,
     reset_enabled: bool,
 ) -> dict[str, Any]:
@@ -353,7 +296,6 @@ async def _process_listing(
                 snap=snap,
                 cycle_id=cycle_id,
                 sampled_at=sampled_at,
-                admin_id=admin_id,
                 commission_pct=commission_pct,
                 reset_attempted=reset_attempted,
                 reset_succeeded=reset_succeeded,
@@ -393,13 +335,6 @@ async def poll_traffic_once() -> None:
     settings = get_settings()
     cycle_id = uuid.uuid4()
     sampled_at = datetime.now(timezone.utc)
-    admin_ids = sorted(settings.admin_ids)
-    admin_id = admin_ids[0] if admin_ids else None
-    if admin_id is None:
-        logger.warning(
-            "[poll] cycle={} no admin id configured — commission rows skipped",
-            cycle_id,
-        )
 
     async with SessionLocal() as session:
         rows = (
@@ -433,7 +368,6 @@ async def poll_traffic_once() -> None:
                 listing_id=lid,
                 cycle_id=cycle_id,
                 sampled_at=sampled_at,
-                admin_id=admin_id,
                 commission_pct=settings.commission_pct,
                 reset_enabled=settings.traffic_reset_enabled,
             )

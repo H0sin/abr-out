@@ -74,6 +74,60 @@ export function PingPill({ ms }: { ms: number | null }) {
   );
 }
 
+/**
+ * Compact "ping-in-a-circle" badge.
+ *
+ * Renders an SVG ring whose color smoothly interpolates between green
+ * (good), orange (medium), and red (bad). Color thresholds match the
+ * pill above so both widgets stay consistent.
+ */
+export function PingCircle({ ms }: { ms: number | null }) {
+  const known = ms !== null && ms !== undefined;
+  const tone = !known
+    ? "ping-unknown"
+    : ms < 80
+      ? "ping-good"
+      : ms < 200
+        ? "ping-mid"
+        : "ping-bad";
+  return (
+    <span className={`ping-circle ${tone}`} title="Ping (ms)">
+      <span className="ping-circle-text">
+        {known ? (
+          <>
+            <span className="num">{ms}</span>
+            <span className="ping-circle-unit">ms</span>
+          </>
+        ) : (
+          <span className="ping-circle-unit">—</span>
+        )}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Stability % indicator. Currently a forward-compatible placeholder: when
+ * the backend has not yet computed a value (``pct === null``), shows "—".
+ */
+export function StabilityPct({ pct }: { pct: number | null }) {
+  if (pct === null || pct === undefined) {
+    return (
+      <span className="stat-pill stat-pill-muted" title="Stability (24h)">
+        پایداری —
+      </span>
+    );
+  }
+  const clamped = Math.max(0, Math.min(100, Math.round(pct)));
+  const tone =
+    clamped >= 90 ? "ping-good" : clamped >= 70 ? "ping-mid" : "ping-bad";
+  return (
+    <span className={`stat-pill ${tone}`} title="Stability (24h)">
+      پایداری <span className="num">{clamped}</span>٪
+    </span>
+  );
+}
+
 export function SkeletonCard() {
   return (
     <div className="card">

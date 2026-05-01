@@ -664,6 +664,80 @@ select {
   color: var(--danger);
 }
 
+/* Circular ping badge with a colored ring (green/orange/red by latency). */
+.ping-circle {
+  --ring: var(--separator);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 2px solid var(--ring);
+  background: var(--surface-1);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 18%, transparent);
+}
+.ping-circle.ping-good {
+  --ring: var(--success);
+  color: var(--success);
+}
+.ping-circle.ping-mid {
+  --ring: var(--warning);
+  color: var(--warning);
+}
+.ping-circle.ping-bad {
+  --ring: var(--danger);
+  color: var(--danger);
+}
+.ping-circle.ping-unknown {
+  color: var(--muted);
+}
+.ping-circle-text {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1;
+  font-size: 12px;
+  font-weight: 700;
+}
+.ping-circle-unit {
+  font-size: 9px;
+  font-weight: 600;
+  opacity: 0.8;
+  margin-top: 2px;
+}
+
+/* Generic small stat pill used on listing cards (sold, 24h, stability). */
+.stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.stat-pill-muted {
+  color: var(--muted);
+}
+.stat-pill.ping-good {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.stat-pill.ping-mid {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+.stat-pill.ping-bad {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
 /* ==========================================================================
    Toasts
    ========================================================================== */

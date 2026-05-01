@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import current_user
-from app.common.db.models import Listing, ListingStatus, User
+from app.common.db.models import (
+    Listing,
+    ListingStatus,
+    OutboundUsage,
+    User,
+)
 from app.common.db.session import SessionLocal
 from app.common.logging import logger
 from app.common.panel.xui_client import XuiClient, XuiError
@@ -34,6 +40,12 @@ class ListingOut(BaseModel):
     sales_count: int
     seller_username: str | None = None
     status: str
+    # Marketplace stats shown on the buy card.
+    total_gb_sold: float = 0.0
+    gb_sold_24h: float = 0.0
+    # Stability percentage (0-100). Reserved for a future feature that
+    # derives stability from ping samples; ``None`` means "not yet computed".
+    stability_pct: int | None = None
 
 
 class ListingCreateIn(BaseModel):
@@ -58,6 +70,7 @@ async def list_active(
     _: User = Depends(current_user),
 ) -> list[ListingOut]:
     """Browse active listings (the marketplace feed)."""
+    cutoff_24h = datetime.now(timezone.utc) - timedelta(hours=24)
     async with SessionLocal() as session:
         result = await session.execute(
             select(Listing, User)
@@ -66,6 +79,18 @@ async def list_active(
             .order_by(Listing.price_per_gb_usd.asc())
         )
         rows = result.all()
+        # Sum 24h GB per listing in a single query.
+        usage_24h_rows = await session.execute(
+            select(
+                OutboundUsage.listing_id,
+                func.coalesce(func.sum(OutboundUsage.gb), 0).label("gb24"),
+            )
+            .where(OutboundUsage.sampled_at >= cutoff_24h)
+            .group_by(OutboundUsage.listing_id)
+        )
+        gb_24h_by_listing: dict[int, float] = {
+            int(lid): float(gb24) for (lid, gb24) in usage_24h_rows.all()
+        }
     # Hide seller-identifying fields (title/iran_host/port/seller_username)
     # so a buyer cannot match a listing back to the seller's Telegram or
     # external IP and contact them outside the bot.
@@ -76,6 +101,9 @@ async def list_active(
             avg_ping_ms=l.avg_ping_ms,
             sales_count=l.sales_count,
             status=l.status.value,
+            total_gb_sold=float(l.total_gb_sold or 0),
+            gb_sold_24h=gb_24h_by_listing.get(l.id, 0.0),
+            stability_pct=None,
         )
         for (l, _u) in rows
     ]
@@ -104,6 +132,9 @@ async def list_my(
             sales_count=l.sales_count,
             seller_username=user.username,
             status=l.status.value,
+            total_gb_sold=float(l.total_gb_sold or 0),
+            gb_sold_24h=0.0,
+            stability_pct=None,
         )
         for l in listings
     ]
@@ -216,4 +247,7 @@ async def create_listing(
         sales_count=listing.sales_count,
         seller_username=user.username,
         status=listing.status.value,
+        total_gb_sold=float(listing.total_gb_sold or 0),
+        gb_sold_24h=0.0,
+        stability_pct=None,
     )

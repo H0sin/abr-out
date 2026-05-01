@@ -123,6 +123,11 @@ export type Listing = {
   sales_count: number;
   seller_username: string | null;
   status: string;
+  total_gb_sold: number;
+  gb_sold_24h: number;
+  // Stability % (0-100). Reserved for a future feature; null when not yet
+  // computed by the backend.
+  stability_pct: number | null;
 };
 
 export type Config = {
