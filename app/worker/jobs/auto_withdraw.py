@@ -97,6 +97,14 @@ async def _evaluate_config(session, cfg: AutoWithdrawalConfig, now, settings, cl
     else:  # threshold
         if cfg.threshold_usd is None or balance < cfg.threshold_usd:
             return
+        # Cooldown: prevent threshold-mode auto-withdraws from firing back-
+        # to-back (which would burn fees on tiny payouts the moment the
+        # balance crosses the threshold each cycle).
+        cooldown = timedelta(
+            minutes=int(settings.auto_withdraw_threshold_cooldown_min)
+        )
+        if cfg.last_run_at is not None and (now - cfg.last_run_at) < cooldown:
+            return
 
     # Amount policy.
     if cfg.amount_policy is AutoWithdrawAmountPolicy.full:

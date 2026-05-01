@@ -13,14 +13,23 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import dataclass
 from decimal import ROUND_DOWN, Decimal
-from typing import Final
+from typing import Any, Final
 
 import httpx
 from eth_account import Account
 from web3 import Web3
 from web3.exceptions import ContractLogicError
 from web3.types import TxReceipt
+
+# Addresses that must never receive a withdrawal: zero address, the USDT
+# contract itself (sending USDT to its own contract burns it on most BEP20
+# implementations), and BSC's standard burn address.
+_FORBIDDEN_ADDRESSES: Final = {
+    "0x0000000000000000000000000000000000000000",
+    "0x000000000000000000000000000000000000dEaD".lower(),
+}
 
 from app.common.logging import logger
 from app.common.settings import get_settings
@@ -64,6 +73,19 @@ class PayoutConfigError(RuntimeError):
 
 class PayoutAddressError(ValueError):
     """Raised when a target address fails checksum/format validation."""
+
+
+@dataclass(frozen=True)
+class SignedTransfer:
+    """A signed BEP20 ``transfer`` ready to broadcast. ``tx_hash`` is the
+    deterministic keccak256 of the signed envelope; it's known *before* the
+    raw tx ever hits the network and is safe to persist as the canonical
+    on-chain identifier."""
+
+    tx_hash: str
+    raw_tx: bytes
+    nonce: int
+    gas_price_wei: int
 
 
 class BscPayoutClient:
@@ -118,15 +140,31 @@ class BscPayoutClient:
 
     # ----- public surface -----
 
-    @staticmethod
-    def is_valid_address(addr: str) -> str:
-        """Return checksummed address or raise :class:`PayoutAddressError`."""
+    def is_valid_address(self, addr: str) -> str:
+        """Return checksummed address or raise :class:`PayoutAddressError`.
+
+        Rejects the zero address, common burn addresses, the USDT contract
+        itself, and (when configured) the hot wallet's own address.
+        """
         if not isinstance(addr, str) or len(addr) != 42 or not addr.startswith("0x"):
             raise PayoutAddressError("invalid BSC address format")
         try:
-            return Web3.to_checksum_address(addr)
+            checksum = Web3.to_checksum_address(addr)
         except Exception as e:  # pragma: no cover - defensive
             raise PayoutAddressError(f"invalid BSC address: {e}") from e
+        lower = checksum.lower()
+        if lower in _FORBIDDEN_ADDRESSES:
+            raise PayoutAddressError("forbidden destination address")
+        if lower == self._settings.bsc_usdt_contract.lower():
+            raise PayoutAddressError("cannot withdraw to the USDT contract address")
+        # Self-send to the hot wallet is almost certainly a misconfiguration.
+        try:
+            hot = self._acct().address.lower()
+        except PayoutConfigError:
+            hot = ""
+        if hot and lower == hot:
+            raise PayoutAddressError("cannot withdraw to the hot wallet address")
+        return checksum
 
     async def estimate_fee_usd(self) -> tuple[Decimal, int]:
         """Return ``(fee_usd, gas_price_wei)`` using a live ``eth_gasPrice``
@@ -149,30 +187,36 @@ class BscPayoutClient:
             logger.warning("[BscPayout] eth_gasPrice failed: {} — falling back to 5 gwei", exc)
             return 5 * 10**9
 
-    async def send_usdt(
+    async def sign_transfer(
         self, to_address: str, amount_usdt: Decimal, gas_price_wei: int | None = None
-    ) -> str:
-        """Build, sign and broadcast a USDT BEP-20 transfer. Returns the tx hash hex."""
+    ) -> SignedTransfer:
+        """Build and sign a USDT BEP-20 transfer **without broadcasting**.
+
+        Returns a :class:`SignedTransfer`. The ``tx_hash`` is final — the
+        caller can persist it before the raw tx is sent, eliminating the
+        "already-broadcast but lost the response" double-spend window.
+        """
         return await asyncio.to_thread(
-            self._send_usdt_sync, to_address, amount_usdt, gas_price_wei
+            self._sign_transfer_sync, to_address, amount_usdt, gas_price_wei
         )
 
-    def _send_usdt_sync(
+    def _sign_transfer_sync(
         self, to_address: str, amount_usdt: Decimal, gas_price_wei: int | None
-    ) -> str:
+    ) -> SignedTransfer:
         w3 = self._w3_inst()
         acct = self._acct()
         usdt = self._usdt()
         decimals = self._usdt_decimals()
         to = Web3.to_checksum_address(to_address)
 
-        # Convert USDT decimal to integer base units (18 decimals on BSC).
         scale = Decimal(10**decimals)
         amount_units = int((amount_usdt * scale).to_integral_value(rounding=ROUND_DOWN))
         if amount_units <= 0:
             raise ValueError("amount_usdt must be > 0 after scaling")
 
-        nonce = w3.eth.get_transaction_count(acct.address)
+        # Use the pending block so concurrent in-flight sends from the same
+        # hot wallet don't collide on nonce.
+        nonce = w3.eth.get_transaction_count(acct.address, "pending")
         gp = int(gas_price_wei) if gas_price_wei else self._gas_price_wei()
 
         try:
@@ -190,8 +234,31 @@ class BscPayoutClient:
 
         signed = acct.sign_transaction(tx)
         raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
-        tx_hash = w3.eth.send_raw_transaction(raw)
-        return tx_hash.hex()
+        # web3.py exposes the hash on the signed envelope; fall back to keccak
+        # if the attribute is absent.
+        try:
+            tx_hash = signed.hash.hex()
+        except Exception:  # pragma: no cover - defensive
+            tx_hash = Web3.keccak(raw).hex()
+        if not tx_hash.startswith("0x"):
+            tx_hash = "0x" + tx_hash
+        return SignedTransfer(
+            tx_hash=tx_hash, raw_tx=bytes(raw), nonce=int(nonce), gas_price_wei=int(gp)
+        )
+
+    async def broadcast_raw(self, raw_tx: bytes) -> str:
+        """Broadcast a previously-signed raw tx. Returns the tx hash hex.
+
+        ``already known`` and ``nonce too low`` errors are *not* fatal: if a
+        previous attempt already injected the same tx into the mempool the
+        send is still durable. The caller should always rely on the
+        deterministic hash from :meth:`sign_transfer`, not the return value.
+        """
+        return await asyncio.to_thread(self._broadcast_raw_sync, raw_tx)
+
+    def _broadcast_raw_sync(self, raw_tx: bytes) -> str:
+        h = self._w3_inst().eth.send_raw_transaction(raw_tx)
+        return h.hex()
 
     async def get_receipt(self, tx_hash: str) -> TxReceipt | None:
         return await asyncio.to_thread(self._get_receipt_sync, tx_hash)
@@ -201,6 +268,42 @@ class BscPayoutClient:
             return self._w3_inst().eth.get_transaction_receipt(tx_hash)
         except Exception:
             return None
+
+    async def get_transaction(self, tx_hash: str) -> dict[str, Any] | None:
+        """Return the tx object (mined or pending). ``None`` means the node
+        has dropped the tx from its mempool — almost always a permanent loss.
+        """
+        return await asyncio.to_thread(self._get_transaction_sync, tx_hash)
+
+    def _get_transaction_sync(self, tx_hash: str) -> dict[str, Any] | None:
+        try:
+            return dict(self._w3_inst().eth.get_transaction(tx_hash))
+        except Exception:
+            return None
+
+    async def usdt_balance(self) -> Decimal:
+        """Hot wallet's USDT balance in human units."""
+        return await asyncio.to_thread(self._usdt_balance_sync)
+
+    def _usdt_balance_sync(self) -> Decimal:
+        try:
+            raw = int(self._usdt().functions.balanceOf(self._acct().address).call())
+        except Exception as exc:  # pragma: no cover - network
+            logger.warning("[BscPayout] balanceOf failed: {}", exc)
+            return Decimal(0)
+        return (Decimal(raw) / Decimal(10**self._usdt_decimals())).quantize(
+            Decimal("0.00000001"), rounding=ROUND_DOWN
+        )
+
+    async def bnb_balance_wei(self) -> int:
+        return await asyncio.to_thread(self._bnb_balance_wei_sync)
+
+    def _bnb_balance_wei_sync(self) -> int:
+        try:
+            return int(self._w3_inst().eth.get_balance(self._acct().address))
+        except Exception as exc:  # pragma: no cover - network
+            logger.warning("[BscPayout] get_balance failed: {}", exc)
+            return 0
 
     @property
     def hot_wallet_address(self) -> str:

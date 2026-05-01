@@ -60,10 +60,24 @@ class Settings(BaseSettings):
     bsc_usdt_contract: str = "0x55d398326f99059fF775485246999027B3197955"
     # Floor on a single withdrawal request, in USD.
     withdrawal_min_usd: Decimal = Decimal("1")
+    # Per-request hard cap on a single withdrawal, in USD.
+    withdrawal_max_usd: Decimal = Decimal("1000")
+    # Per-user 24-hour rolling cap on the sum of non-failed withdrawals, in USD.
+    withdrawal_max_usd_per_day: Decimal = Decimal("5000")
     # Gas units used by a BEP20 ``transfer`` (slightly above 21k+~30k typical).
     withdrawal_gas_limit: int = 80000
     # Multiplier on the gas estimate to absorb price spikes between quote and broadcast.
     withdrawal_fee_buffer_pct: Decimal = Decimal("1.20")
+    # If a row sits in ``submitting`` longer than this (because the worker
+    # crashed between the status update and the actual broadcast), revert it
+    # to ``pending`` so the next tick retries.
+    withdrawal_submitting_recovery_min: int = 5
+    # If a ``submitted`` row has neither a receipt nor an in-mempool tx after
+    # this many minutes, alert admin and freeze it (no auto-refund).
+    withdrawal_submitted_alert_min: int = 60
+    # Minimum spacing between threshold-mode auto-withdrawals for the same
+    # user, in minutes — prevents a tight loop of micro-payouts.
+    auto_withdraw_threshold_cooldown_min: int = 60
     # BNB/USDT live ticker used to convert gas (BNB) to USD for the fee quote.
     bnb_price_feed_url: str = (
         "https://api.binance.com/api/v3/ticker/price?symbol=BNBUSDT"

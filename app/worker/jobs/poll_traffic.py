@@ -68,6 +68,10 @@ from app.common.settings import get_settings
 
 ZERO = Decimal("0")
 _BYTES_PER_GB = Decimal(1024**3)
+# Minimum delta (in bytes) to record a usage row / wallet transaction.
+# Anything smaller than this is forgiven — keeps the DB free of noise rows
+# from idle clients, keep-alives, and rounding artifacts.
+_MIN_BILLABLE_BYTES = 512 * 1024  # 0.5 MiB
 
 
 def _q_usd(x: Decimal) -> Decimal:
@@ -123,7 +127,7 @@ async def _bill_inbound(
         outbound_delta = current_inbound_total
 
     had_traffic = False
-    if outbound_delta > 0:
+    if outbound_delta >= _MIN_BILLABLE_BYTES:
         had_traffic = True
         gb = _q_gb(Decimal(outbound_delta) / _BYTES_PER_GB)
         seller_credit = _q_usd(gb * listing.price_per_gb_usd)
@@ -203,7 +207,7 @@ async def _bill_inbound(
                 current_total,
             )
             delta = current_total
-        if delta > 0:
+        if delta >= _MIN_BILLABLE_BYTES:
             had_traffic = True
             gb = _q_gb(Decimal(delta) / _BYTES_PER_GB)
             buyer_debit = _q_usd(

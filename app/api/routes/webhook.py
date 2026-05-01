@@ -64,10 +64,12 @@ async def nowpayments_ipn(
         return Response(status_code=200)
 
     result = await session.execute(
-        select(PaymentIntent).where(
+        select(PaymentIntent)
+        .where(
             PaymentIntent.external_ref == order_id,
             PaymentIntent.gateway == PaymentGateway.nowpayments,
         )
+        .with_for_update()
     )
     intent = result.scalar_one_or_none()
     if intent is None:

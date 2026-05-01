@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.db.models import (
@@ -95,6 +96,10 @@ async def create_withdrawal(
         raise WithdrawalError(
             f"حداقل مبلغ برداشت {settings.withdrawal_min_usd}$ است."
         )
+    if amount_usd > settings.withdrawal_max_usd:
+        raise WithdrawalError(
+            f"حداکثر مبلغ هر درخواست {settings.withdrawal_max_usd}$ است."
+        )
 
     # User must exist + not be blocked.
     user = await session.get(User, user_id)
@@ -102,6 +107,15 @@ async def create_withdrawal(
         raise WithdrawalError("کاربر یافت نشد.")
     if user.is_blocked:
         raise WithdrawalError("حساب شما مسدود است.")
+
+    # Serialize all balance-mutating writes for this user. Postgres advisory
+    # locks are released at COMMIT/ROLLBACK so we don't need explicit cleanup.
+    # Two-int form keeps the key inside int4 range while still being unique
+    # per (namespace=1, user_id).
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:ns, :uid)"),
+        {"ns": 1, "uid": int(user_id) & 0x7FFFFFFF},
+    )
 
     # Prevent stacking concurrent withdrawals.
     existing = await session.execute(
@@ -117,6 +131,30 @@ async def create_withdrawal(
             "یک درخواست برداشت در حال پردازش دارید؛ تا اتمام آن منتظر بمانید."
         )
 
+    # 24-hour rolling cap (counts everything except already-refunded/failed rows).
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    spent_24h = (
+        await session.execute(
+            select(func.coalesce(func.sum(WithdrawalRequest.amount_usd), 0))
+            .where(
+                WithdrawalRequest.user_id == user_id,
+                WithdrawalRequest.created_at >= since,
+                WithdrawalRequest.status.notin_(
+                    (WithdrawalStatus.failed, WithdrawalStatus.refunded)
+                ),
+            )
+        )
+    ).scalar_one()
+    spent_24h = Decimal(spent_24h)
+    if spent_24h + amount_usd > settings.withdrawal_max_usd_per_day:
+        remaining = max(
+            settings.withdrawal_max_usd_per_day - spent_24h, Decimal(0)
+        )
+        raise WithdrawalError(
+            f"سقف برداشت ۲۴ ساعته ({settings.withdrawal_max_usd_per_day}$). "
+            f"امکان برداشت باقیمانده: {remaining}$."
+        )
+
     balance = await get_balance(session, user_id)
     if balance < amount_usd:
         raise WithdrawalError(
@@ -127,6 +165,17 @@ async def create_withdrawal(
     if quote.net_usdt <= 0:
         raise WithdrawalError(
             f"کارمزد شبکه ({quote.fee_usd}$) از مبلغ برداشت بیشتر است."
+        )
+
+    # Hot-wallet liquidity pre-check — better to surface a clear error than
+    # to debit, broadcast, fail and refund.
+    try:
+        hot_usdt = await c.usdt_balance()
+    except PayoutConfigError:
+        hot_usdt = Decimal(0)
+    if hot_usdt > 0 and hot_usdt < quote.net_usdt:
+        raise WithdrawalError(
+            "سرویس برداشت موقتاً در دسترس نیست؛ لطفاً بعداً تلاش کنید."
         )
 
     idem = f"withdraw-debit-{secrets.token_hex(12)}"
