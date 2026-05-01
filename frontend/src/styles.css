@@ -79,16 +79,39 @@
   --tabbar-h: 64px;
 }
 
+/* When the user explicitly picks a scheme via ThemeToggle, decouple from
+   Telegram's injected theme variables and use explicit colors so the toggle
+   has a visible effect even if Telegram's colorScheme differs. */
+html[data-scheme="light"] {
+  --bg: #f5f6fa;
+  --surface-1: #ffffff;
+  --surface-2: color-mix(in srgb, var(--surface-1) 92%, #0b1220 8%);
+  --surface-3: color-mix(in srgb, var(--surface-1) 84%, #0b1220 16%);
+  --text: #0b1220;
+  --hint: #707892;
+  --separator: rgba(15, 23, 42, 0.08);
+  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 1px rgba(15, 23, 42, 0.03);
+  --shadow-2: 0 4px 12px -2px rgba(15, 23, 42, 0.08),
+    0 2px 4px -1px rgba(15, 23, 42, 0.04);
+  --shadow-3: 0 16px 32px -12px rgba(15, 23, 42, 0.18),
+    0 4px 8px -2px rgba(15, 23, 42, 0.06);
+  --accent-glow: 0 8px 24px -8px rgba(99, 102, 241, 0.55);
+  color-scheme: light;
+}
+
 html[data-scheme="dark"] {
-  --bg: var(--tg-theme-bg-color, #0b1220);
-  --surface-1: var(--tg-theme-section-bg-color, #141b2d);
+  --bg: #0b1220;
+  --surface-1: #141b2d;
   --surface-2: color-mix(in srgb, var(--surface-1) 80%, white 20%);
   --surface-3: color-mix(in srgb, var(--surface-1) 65%, white 35%);
+  --text: #e6e9f2;
+  --hint: #8a93ad;
   --separator: rgba(255, 255, 255, 0.08);
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-2: 0 6px 16px -4px rgba(0, 0, 0, 0.5);
   --shadow-3: 0 24px 48px -16px rgba(0, 0, 0, 0.6);
   --accent-glow: 0 12px 28px -10px rgba(99, 102, 241, 0.65);
+  color-scheme: dark;
 }
 
 * {

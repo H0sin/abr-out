@@ -17,6 +17,12 @@ function detect(): Scheme {
 
 function apply(scheme: Scheme) {
   document.documentElement.dataset.scheme = scheme;
+  document.documentElement.style.colorScheme = scheme;
+}
+
+// Apply as early as possible (module load) to avoid a flash of the wrong theme.
+if (typeof document !== "undefined") {
+  apply(detect());
 }
 
 export function ThemeToggle() {
