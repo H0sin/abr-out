@@ -1,4 +1,4 @@
-import { ReactNode } from "react";
+import { ReactNode, useEffect } from "react";
 
 export function Skeleton({
   width,
@@ -87,6 +87,50 @@ export function SkeletonCard() {
       </div>
       <div style={{ height: 12 }} />
       <Skeleton height={42} radius={12} />
+    </div>
+  );
+}
+
+export function Modal({
+  open,
+  title,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title?: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return (
+    <div
+      className="modal-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="modal" role="dialog" aria-modal="true">
+        <button
+          type="button"
+          className="modal-close"
+          aria-label="بستن"
+          onClick={onClose}
+        >
+          ×
+        </button>
+        {title && <h3>{title}</h3>}
+        {children}
+      </div>
     </div>
   );
 }

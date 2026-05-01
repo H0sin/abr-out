@@ -189,6 +189,13 @@ class Config(Base):
         PG_UUID(as_uuid=True), default=uuid.uuid4, nullable=False
     )
     panel_client_email: Mapped[str] = mapped_column(String(128), nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    expiry_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    total_gb_limit: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 4), nullable=True
+    )
     vless_link: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[ConfigStatus] = mapped_column(
         Enum(ConfigStatus, name="config_status"),
@@ -204,8 +211,8 @@ class Config(Base):
     buyer: Mapped[User] = relationship(back_populates="configs")
 
     __table_args__ = (
-        UniqueConstraint("listing_id", "buyer_user_id", name="uq_configs_listing_buyer"),
         Index("ix_configs_buyer_status", "buyer_user_id", "status"),
+        Index("ix_configs_listing_buyer", "listing_id", "buyer_user_id"),
     )
 
 

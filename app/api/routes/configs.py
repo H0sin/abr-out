@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import re
 import uuid
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.deps import current_user
@@ -27,19 +29,52 @@ router = APIRouter(prefix="/api/configs", tags=["configs"])
 # Pay-as-you-go: real billing happens later via the worker.
 MIN_BALANCE_FOR_NEW_CONFIG = Decimal("0.5")
 
+# Allow latin word chars, digits, dash/underscore/space, and Persian/Arabic range.
+_NAME_DISALLOWED = re.compile(r"[^\w\u0600-\u06FF\- ]+")
+_NAME_MAX_LEN = 32
+
+
+def _sanitize_name(raw: str) -> str:
+    s = _NAME_DISALLOWED.sub("", raw or "").strip()
+    s = re.sub(r"\s+", " ", s)
+    return s[:_NAME_MAX_LEN]
+
 
 class ConfigOut(BaseModel):
     id: int
     listing_id: int
     listing_title: str
+    name: str
     panel_client_email: str
     vless_link: str
     status: str
     last_traffic_bytes: int
+    expiry_at: datetime | None = None
+    total_gb_limit: float | None = None
 
 
 class ConfigCreateIn(BaseModel):
     listing_id: int
+    name: str = Field(min_length=1, max_length=64)
+    expiry_days: int | None = Field(default=None, ge=1, le=3650)
+    total_gb_limit: float | None = Field(default=None, gt=0, le=100000)
+
+
+def _to_out(c: Config, l: Listing) -> ConfigOut:
+    return ConfigOut(
+        id=c.id,
+        listing_id=c.listing_id,
+        listing_title=l.title,
+        name=c.name,
+        panel_client_email=c.panel_client_email,
+        vless_link=c.vless_link,
+        status=c.status.value,
+        last_traffic_bytes=c.last_traffic_bytes,
+        expiry_at=c.expiry_at,
+        total_gb_limit=(
+            float(c.total_gb_limit) if c.total_gb_limit is not None else None
+        ),
+    )
 
 
 @router.get("", response_model=list[ConfigOut])
@@ -54,18 +89,7 @@ async def list_my_configs(
             .order_by(Config.created_at.desc())
         )
         rows = result.all()
-    return [
-        ConfigOut(
-            id=c.id,
-            listing_id=c.listing_id,
-            listing_title=l.title,
-            panel_client_email=c.panel_client_email,
-            vless_link=c.vless_link,
-            status=c.status.value,
-            last_traffic_bytes=c.last_traffic_bytes,
-        )
-        for (c, l) in rows
-    ]
+    return [_to_out(c, l) for (c, l) in rows]
 
 
 @router.post("", response_model=ConfigOut, status_code=201)
@@ -75,10 +99,18 @@ async def create_config(
 ) -> ConfigOut:
     """
     Buy: create a new client on the seller's listing.
-    Pay-as-you-go — wallet is debited later by the worker based on actual usage.
-    Requires a small minimum balance to prevent abuse.
+
+    Pay-as-you-go — the wallet is debited later by the worker based on
+    actual traffic; the buyer-supplied ``expiry_days`` and ``total_gb_limit``
+    are informational/panel-enforced caps the buyer chose for their own
+    config (e.g. for resale). When the buyer's wallet runs out, the
+    enforce-balance worker disables the config regardless of those caps.
     """
     settings = get_settings()
+
+    name = _sanitize_name(body.name)
+    if not name:
+        raise HTTPException(422, detail="invalid name")
 
     async with SessionLocal() as session:
         balance = await get_balance(session, user.telegram_id)
@@ -98,16 +130,6 @@ async def create_config(
         if listing.seller_user_id == user.telegram_id:
             raise HTTPException(400, detail="cannot buy from your own listing")
 
-        # Already has a config for this listing?
-        existing = await session.execute(
-            select(Config).where(
-                Config.listing_id == listing.id,
-                Config.buyer_user_id == user.telegram_id,
-            )
-        )
-        if existing.scalar_one_or_none() is not None:
-            raise HTTPException(409, detail="already have a config for this listing")
-
         if listing.panel_inbound_id is None:
             raise HTTPException(
                 500,
@@ -115,17 +137,31 @@ async def create_config(
             )
 
         client_uuid = uuid.uuid4()
-        email = f"u{user.telegram_id}-l{listing.id}-{client_uuid.hex[:6]}"
+        # Panel email = sanitized name + 6-char uuid suffix (panel uniqueness).
+        email_safe = re.sub(r"\s+", "_", name)
+        email = f"{email_safe}-{client_uuid.hex[:6]}"
 
-        # Create the client on 3x-ui
+        expiry_at: datetime | None = None
+        expiry_ms = 0
+        if body.expiry_days is not None:
+            expiry_at = datetime.now(timezone.utc) + timedelta(days=body.expiry_days)
+            expiry_ms = int(expiry_at.timestamp() * 1000)
+
+        total_gb_limit: Decimal | None = None
+        total_gb_xui = 0
+        if body.total_gb_limit is not None:
+            total_gb_limit = Decimal(str(body.total_gb_limit))
+            # XuiClient.add_client expects an int GB value.
+            total_gb_xui = max(1, int(round(body.total_gb_limit)))
+
         try:
             async with XuiClient() as xui:
                 await xui.add_client(
                     inbound_id=listing.panel_inbound_id,
                     client_uuid=client_uuid,
                     email=email,
-                    total_gb=0,  # unlimited; we bill per actual usage
-                    expiry_ms=0,
+                    total_gb=total_gb_xui,
+                    expiry_ms=expiry_ms,
                     enable=True,
                 )
         except XuiError as e:
@@ -142,6 +178,9 @@ async def create_config(
             buyer_user_id=user.telegram_id,
             panel_client_uuid=client_uuid,
             panel_client_email=email,
+            name=name,
+            expiry_at=expiry_at,
+            total_gb_limit=total_gb_limit,
             vless_link=vless_link,
             status=ConfigStatus.active,
         )
@@ -150,12 +189,4 @@ async def create_config(
         await session.commit()
         await session.refresh(config)
 
-    return ConfigOut(
-        id=config.id,
-        listing_id=listing.id,
-        listing_title=listing.title,
-        panel_client_email=config.panel_client_email,
-        vless_link=config.vless_link,
-        status=config.status.value,
-        last_traffic_bytes=config.last_traffic_bytes,
-    )
+    return _to_out(config, listing)

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
 
     # Telegram
     bot_token: str = Field(default="")
+    bot_username: str = Field(default="")  # without leading @, e.g. "abrout_bot"
     admin_telegram_ids: str = Field(default="")  # comma-separated
 
     # Database

@@ -91,3 +91,13 @@ export function showConfirm(message: string): Promise<boolean> {
     }
   });
 }
+
+/** Open a t.me link inside the Telegram client (or fallback to a new tab). */
+export function openTelegramLink(url: string): void {
+  const t = tg() as unknown as { openTelegramLink?: (u: string) => void } | undefined;
+  if (t?.openTelegramLink) {
+    t.openTelegramLink(url);
+  } else {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}

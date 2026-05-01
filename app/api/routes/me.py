@@ -24,6 +24,7 @@ class MeOut(BaseModel):
     balance_usd: Decimal
     is_admin: bool
     is_blocked: bool
+    bot_username: str | None = None
 
 
 class TransactionOut(BaseModel):
@@ -68,6 +69,7 @@ async def me(user: User = Depends(current_user)) -> MeOut:
         balance_usd=balance,
         is_admin=user.telegram_id in get_settings().admin_ids,
         is_blocked=user.is_blocked,
+        bot_username=(get_settings().bot_username or None),
     )
 
 

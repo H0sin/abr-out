@@ -71,6 +71,7 @@ export type Me = {
   balance_usd: string; // Decimal serialised as string
   is_admin: boolean;
   is_blocked: boolean;
+  bot_username: string | null;
 };
 
 export type Transaction = {
@@ -125,10 +126,20 @@ export type Config = {
   id: number;
   listing_id: number;
   listing_title: string;
+  name: string;
   panel_client_email: string;
   vless_link: string;
   status: string;
   last_traffic_bytes: number;
+  expiry_at: string | null;
+  total_gb_limit: number | null;
+};
+
+export type BuyConfigInput = {
+  listing_id: number;
+  name: string;
+  expiry_days?: number | null;
+  total_gb_limit?: number | null;
 };
 
 export const api = {
@@ -158,12 +169,18 @@ export const api = {
       body: JSON.stringify(body),
     }),
   listConfigs: () => request<Config[]>("/api/configs"),
-  buyConfig: (listing_id: number) =>
+  buyConfig: (body: BuyConfigInput) =>
     request<Config>("/api/configs", {
       method: "POST",
-      body: JSON.stringify({ listing_id }),
+      body: JSON.stringify(body),
     }),
 };
+
+/** Telegram deep-link to open the bot's top-up FSM directly. */
+export function topupDeepLink(botUsername: string | null | undefined): string | null {
+  if (!botUsername) return null;
+  return `https://t.me/${botUsername}?start=topup`;
+}
 
 // ---------- Admin ----------
 

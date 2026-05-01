@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from html import escape
 
 from aiogram import F, Router
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
@@ -57,7 +57,11 @@ async def _block_guard_cb(cb: CallbackQuery) -> bool:
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message) -> None:
+async def cmd_start(
+    message: Message,
+    command: CommandObject,
+    state: FSMContext,
+) -> None:
     if message.from_user is None:
         return
 
@@ -91,10 +95,24 @@ async def cmd_start(message: Message) -> None:
         "سلام! به مارکت‌پلیس اوت\u200cباند خوش اومدی.",
         reply_markup=hide_reply_keyboard(),
     )
-    await message.answer(
-        "از منوی زیر یکی را انتخاب کن:",
-        reply_markup=main_menu_inline(),
-    )
+
+    payload = (command.args or "").strip().lower()
+    if payload == "topup":
+        # Deep-link from miniapp: jump straight into the top-up FSM.
+        from app.bot.handlers.topup import TopUpStates
+
+        settings = get_settings()
+        await state.set_state(TopUpStates.waiting_amount)
+        await message.answer(
+            f"💵 مبلغ دلاری که می‌خواهید به کیف پول اضافه شود را وارد کنید:\n"
+            f"(حداقل: <b>{settings.min_topup_usd}$</b>)\n\n"
+            f"مثال: <code>5</code> یا <code>10.50</code>",
+        )
+    else:
+        await message.answer(
+            "از منوی زیر یکی را انتخاب کن:",
+            reply_markup=main_menu_inline(),
+        )
 
     if is_first_start:
         await _notify_admins_new_user(user)
