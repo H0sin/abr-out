@@ -1564,3 +1564,159 @@ select {
   color: var(--text);
   font-weight: 600;
 }
+
+
+
+/* ==========================================================================
+   Transaction list cards (TransactionsList.tsx)
+   ========================================================================== */
+
+.tx-day-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--hint);
+  margin: 14px 4px 6px;
+  letter-spacing: 0.02em;
+}
+
+.tx-day-header:first-child {
+  margin-top: 4px;
+}
+
+.tx-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  background: var(--surface-1);
+  border: 1px solid var(--separator);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+
+.tx-card::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block: 0;
+  width: 3px;
+  background: var(--accent);
+  opacity: 0.85;
+}
+
+.tx-tone-credit::before { background: var(--success); }
+.tx-tone-debit::before  { background: var(--danger); }
+.tx-tone-topup::before  { background: var(--success); }
+.tx-tone-payout::before { background: var(--warning); }
+.tx-tone-adjustment::before { background: var(--accent); }
+.tx-tone-commission::before { background: var(--warning); }
+
+.tx-icon {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 16px;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  line-height: 1;
+}
+
+.tx-icon-credit,
+.tx-icon-topup {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.tx-icon-debit {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.tx-icon-payout,
+.tx-icon-commission {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.tx-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tx-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tx-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.tx-time {
+  font-size: 11px;
+  color: var(--hint);
+  white-space: nowrap;
+}
+
+.tx-desc {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text);
+  opacity: 0.9;
+  word-break: break-word;
+}
+
+.tx-ref {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--hint);
+  opacity: 0.75;
+}
+
+.tx-ref code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.tx-amount {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.tx-amount-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.tx-amount-pos .tx-amount-value { color: var(--success); }
+.tx-amount-neg .tx-amount-value { color: var(--danger); }
+
+.tx-amount-unit {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--hint);
+  letter-spacing: 0.04em;
+}

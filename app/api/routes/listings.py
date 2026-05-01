@@ -10,6 +10,8 @@ from sqlalchemy import func, select
 
 from app.api.deps import current_user
 from app.common.db.models import (
+    Config,
+    ConfigStatus,
     Listing,
     ListingStatus,
     OutboundUsage,
@@ -17,10 +19,16 @@ from app.common.db.models import (
 )
 from app.common.db.session import SessionLocal
 from app.common.logging import logger
+from app.common.notifications import notify_listing_buyers
 from app.common.panel.xui_client import XuiClient, XuiError
 from app.common.settings import get_settings
 
 router = APIRouter(prefix="/api/listings", tags=["listings"])
+
+# Hard cap: a single seller may have at most this many listings whose
+# ``status`` is anything other than ``deleted``. Soft-deleted rows do not
+# count, so the seller can always free a slot via DELETE.
+MAX_LISTINGS_PER_SELLER = 5
 
 
 def _buyer_price(raw: Decimal, commission_mult: Decimal) -> Decimal:
@@ -151,7 +159,10 @@ async def list_my(
     async with SessionLocal() as session:
         result = await session.execute(
             select(Listing)
-            .where(Listing.seller_user_id == user.telegram_id)
+            .where(
+                Listing.seller_user_id == user.telegram_id,
+                Listing.status != ListingStatus.deleted,
+            )
             .order_by(Listing.created_at.desc())
         )
         listings = result.scalars().all()
@@ -191,6 +202,27 @@ async def create_listing(
         body.price_per_gb_usd,
     )
     async with SessionLocal() as session:
+        # Enforce the per-seller listing cap. ``deleted`` rows are the only
+        # state that frees a slot; ``active`` and ``disabled`` both count.
+        active_count = (
+            await session.execute(
+                select(func.count())
+                .select_from(Listing)
+                .where(
+                    Listing.seller_user_id == user.telegram_id,
+                    Listing.status != ListingStatus.deleted,
+                )
+            )
+        ).scalar_one()
+        if int(active_count) >= MAX_LISTINGS_PER_SELLER:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"max {MAX_LISTINGS_PER_SELLER} listings per seller; "
+                    "delete an existing one before creating another"
+                ),
+            )
+
         # uniqueness on port is enforced by the DB; surface a friendly error
         existing = await session.execute(
             select(Listing).where(Listing.port == body.port)
@@ -289,3 +321,335 @@ async def create_listing(
         gb_sold_24h=0.0,
         stability_pct=None,
     )
+
+
+# --- Lifecycle: disable / enable / edit / delete -----------------------------
+
+
+class ListingPatchIn(BaseModel):
+    """Subset of editable listing fields. ``port`` is intentionally absent —
+    the seller may never change the port because it is bound to a 3x-ui
+    inbound and to every issued ``vless://`` URI."""
+
+    title: str | None = Field(default=None, min_length=2, max_length=128)
+    iran_host: str | None = Field(default=None, min_length=7, max_length=15)
+    price_per_gb_usd: Decimal | None = Field(default=None, gt=0)
+
+    @field_validator("title")
+    @classmethod
+    def _ascii_title(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip()
+        if not _ASCII_TITLE_RE.fullmatch(v):
+            raise ValueError(
+                "title must be English letters, digits, space, dot, dash, or underscore"
+            )
+        return v
+
+    @field_validator("iran_host")
+    @classmethod
+    def _ipv4_only(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip()
+        if not _IPV4_RE.fullmatch(v):
+            raise ValueError("iran_host must be a valid IPv4 address")
+        return v
+
+
+def _listing_to_out(l: Listing, seller_username: str | None) -> ListingOut:
+    commission_mult = Decimal("1") + get_settings().commission_pct
+    return ListingOut(
+        id=l.id,
+        title=l.title,
+        iran_host=l.iran_host,
+        port=l.port,
+        price_per_gb_usd=l.price_per_gb_usd,
+        buyer_price_per_gb_usd=_buyer_price(l.price_per_gb_usd, commission_mult),
+        avg_ping_ms=l.avg_ping_ms,
+        sales_count=l.sales_count,
+        seller_username=seller_username,
+        status=l.status.value,
+        total_gb_sold=float(l.total_gb_sold or 0),
+        gb_sold_24h=0.0,
+        stability_pct=None,
+    )
+
+
+async def _load_owned_listing(session, listing_id: int, user: User) -> Listing:
+    listing = await session.get(Listing, listing_id)
+    if listing is None or listing.status == ListingStatus.deleted:
+        raise HTTPException(404, detail="listing not found")
+    if listing.seller_user_id != user.telegram_id:
+        raise HTTPException(403, detail="not your listing")
+    return listing
+
+
+def _rewrite_vless_host(link: str, new_host: str, port: int) -> str:
+    """Replace the ``@host:port`` portion of an existing vless URI."""
+    return re.sub(
+        r"(vless://[^@]+@)[^:?#]+:\d+",
+        rf"\1{new_host}:{port}",
+        link,
+        count=1,
+    )
+
+
+@router.post("/{listing_id}/disable", response_model=ListingOut)
+async def disable_listing(
+    listing_id: int,
+    user: User = Depends(current_user),
+) -> ListingOut:
+    """Seller pauses the listing: every active client is disabled in 3x-ui
+    and a Telegram message is sent once to each affected buyer."""
+    async with SessionLocal() as session:
+        listing = await _load_owned_listing(session, listing_id, user)
+        if listing.status == ListingStatus.disabled:
+            return _listing_to_out(listing, user.username)
+
+        configs = (
+            await session.execute(
+                select(Config).where(
+                    Config.listing_id == listing.id,
+                    Config.status == ConfigStatus.active,
+                )
+            )
+        ).scalars().all()
+
+        if listing.panel_inbound_id is not None and configs:
+            try:
+                async with XuiClient() as xui:
+                    for c in configs:
+                        try:
+                            await xui.update_client_enabled(
+                                inbound_id=listing.panel_inbound_id,
+                                client_uuid=c.panel_client_uuid,
+                                email=c.panel_client_email,
+                                enable=False,
+                            )
+                        except XuiError as e:
+                            logger.warning(
+                                "[listings.disable] panel disable failed cfg={} err={}",
+                                c.id,
+                                e,
+                            )
+            except Exception:
+                logger.exception("[listings.disable] panel session error")
+
+        for c in configs:
+            c.status = ConfigStatus.disabled
+
+        listing.status = ListingStatus.disabled
+        listing.disabled_at = datetime.now(timezone.utc)
+
+        await session.commit()
+        await session.refresh(listing)
+
+        await notify_listing_buyers(
+            session,
+            listing.id,
+            (
+                f"⚠️ اوت‌باند #{listing.id} توسط فروشنده غیرفعال شد. "
+                "کانفیگ شما متوقف شد. لطفاً اوت‌باند دیگری انتخاب کنید."
+            ),
+        )
+
+    return _listing_to_out(listing, user.username)
+
+
+@router.post("/{listing_id}/enable", response_model=ListingOut)
+async def enable_listing(
+    listing_id: int,
+    user: User = Depends(current_user),
+) -> ListingOut:
+    """Seller resumes the listing. Configs are NOT auto-re-enabled — each
+    buyer must opt back in from their own configs page."""
+    async with SessionLocal() as session:
+        listing = await _load_owned_listing(session, listing_id, user)
+        if listing.status == ListingStatus.active:
+            return _listing_to_out(listing, user.username)
+        listing.status = ListingStatus.active
+        listing.disabled_at = None
+        await session.commit()
+        await session.refresh(listing)
+    return _listing_to_out(listing, user.username)
+
+
+@router.patch("/{listing_id}", response_model=ListingOut)
+async def patch_listing(
+    listing_id: int,
+    body: ListingPatchIn,
+    user: User = Depends(current_user),
+) -> ListingOut:
+    """Edit a listing in place. ``port`` is immutable. Host / price changes
+    cascade to the buyer's vless link and (for opted-in configs on a price
+    increase) trigger an automatic disable + Telegram notification.
+    """
+    async with SessionLocal() as session:
+        listing = await _load_owned_listing(session, listing_id, user)
+
+        old_host = listing.iran_host
+        old_price = Decimal(listing.price_per_gb_usd)
+
+        host_changed = body.iran_host is not None and body.iran_host != old_host
+        price_increased = (
+            body.price_per_gb_usd is not None
+            and body.price_per_gb_usd > old_price
+        )
+
+        if body.title is not None:
+            listing.title = body.title
+        if body.price_per_gb_usd is not None:
+            listing.price_per_gb_usd = body.price_per_gb_usd
+        if host_changed:
+            listing.iran_host = body.iran_host  # type: ignore[assignment]
+
+        # Host change: rewrite every active/disabled config's vless link so
+        # the buyer's clipboard QR keeps working without a re-buy.
+        if host_changed:
+            cfgs = (
+                await session.execute(
+                    select(Config).where(
+                        Config.listing_id == listing.id,
+                        Config.status != ConfigStatus.deleted,
+                    )
+                )
+            ).scalars().all()
+            for c in cfgs:
+                c.vless_link = _rewrite_vless_host(
+                    c.vless_link, listing.iran_host, listing.port
+                )
+
+        # Price increase: disable opted-in active configs in the panel
+        # before committing so the panel/DB stay consistent.
+        opted_in_disabled: list[Config] = []
+        if price_increased and listing.panel_inbound_id is not None:
+            opted_in_active = (
+                await session.execute(
+                    select(Config).where(
+                        Config.listing_id == listing.id,
+                        Config.status == ConfigStatus.active,
+                        Config.auto_disable_on_price_increase.is_(True),
+                    )
+                )
+            ).scalars().all()
+            if opted_in_active:
+                try:
+                    async with XuiClient() as xui:
+                        for c in opted_in_active:
+                            try:
+                                await xui.update_client_enabled(
+                                    inbound_id=listing.panel_inbound_id,
+                                    client_uuid=c.panel_client_uuid,
+                                    email=c.panel_client_email,
+                                    enable=False,
+                                )
+                                c.status = ConfigStatus.disabled
+                                opted_in_disabled.append(c)
+                            except XuiError as e:
+                                logger.warning(
+                                    "[listings.patch] price-disable failed cfg={} err={}",
+                                    c.id,
+                                    e,
+                                )
+                except Exception:
+                    logger.exception("[listings.patch] panel session error")
+
+        await session.commit()
+        await session.refresh(listing)
+
+        if host_changed:
+            await notify_listing_buyers(
+                session,
+                listing.id,
+                (
+                    f"ℹ️ آدرس IP اوت‌باند #{listing.id} از <code>{old_host}</code> "
+                    f"به <code>{listing.iran_host}</code> تغییر کرد. "
+                    "لطفاً تغییرات لازم را در کلاینت/پنل خود انجام دهید."
+                ),
+            )
+        if price_increased and opted_in_disabled:
+            await notify_listing_buyers(
+                session,
+                listing.id,
+                (
+                    f"⚠️ قیمت اوت‌باند #{listing.id} افزایش یافت؛ کانفیگ شما "
+                    "طبق تنظیماتتان به‌صورت خودکار غیرفعال شد. در صورت تمایل "
+                    "از منوی کانفیگ‌ها مجدداً فعال کنید."
+                ),
+                only_with_price_flag=True,
+            )
+
+    return _listing_to_out(listing, user.username)
+
+
+@router.delete("/{listing_id}", status_code=204)
+async def delete_listing(
+    listing_id: int,
+    user: User = Depends(current_user),
+) -> None:
+    """Soft-delete a listing. All non-deleted child configs are removed
+    from 3x-ui, soft-deleted in the DB, and their buyers are notified.
+    The 3x-ui inbound itself is also removed (best-effort).
+    """
+    async with SessionLocal() as session:
+        listing = await _load_owned_listing(session, listing_id, user)
+
+        cfgs = (
+            await session.execute(
+                select(Config).where(
+                    Config.listing_id == listing.id,
+                    Config.status != ConfigStatus.deleted,
+                )
+            )
+        ).scalars().all()
+
+        affected_buyer_ids = sorted({c.buyer_user_id for c in cfgs})
+
+        if listing.panel_inbound_id is not None:
+            try:
+                async with XuiClient() as xui:
+                    for c in cfgs:
+                        try:
+                            await xui.delete_client(
+                                listing.panel_inbound_id, c.panel_client_uuid
+                            )
+                        except XuiError as e:
+                            logger.warning(
+                                "[listings.delete] delClient failed cfg={} err={}",
+                                c.id,
+                                e,
+                            )
+                    try:
+                        await xui.delete_inbound(listing.panel_inbound_id)
+                    except XuiError as e:
+                        logger.warning(
+                            "[listings.delete] delete_inbound failed id={} err={}",
+                            listing.panel_inbound_id,
+                            e,
+                        )
+            except Exception:
+                logger.exception("[listings.delete] panel session error")
+
+        now = datetime.now(timezone.utc)
+        for c in cfgs:
+            c.status = ConfigStatus.deleted
+            c.deleted_at = now
+
+        listing.status = ListingStatus.deleted
+        listing.deleted_at = now
+
+        await session.commit()
+
+        # Notify each affected buyer once (deleted configs are excluded by
+        # notify_listing_buyers, so we send directly using the snapshot).
+        from app.common.notifications import notify_users
+
+        await notify_users(
+            affected_buyer_ids,
+            (
+                f"❌ اوت‌باند #{listing_id} توسط فروشنده حذف شد. "
+                "کانفیگ شما حذف شد؛ لطفاً اوت‌باند دیگری انتخاب کنید."
+            ),
+        )

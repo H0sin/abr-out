@@ -39,11 +39,13 @@ class ListingStatus(str, enum.Enum):
     pending = "pending"
     active = "active"
     disabled = "disabled"
+    deleted = "deleted"
 
 
 class ConfigStatus(str, enum.Enum):
     active = "active"
     disabled = "disabled"
+    deleted = "deleted"
 
 
 class TxnType(str, enum.Enum):
@@ -186,6 +188,12 @@ class Listing(Base):
     last_outbound_down_bytes: Mapped[int] = mapped_column(
         BigInteger, default=0, server_default="0", nullable=False
     )
+    disabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -233,6 +241,12 @@ class Config(Base):
     # because the panel counters are zeroed each cycle.
     last_snapshot_bytes: Mapped[int] = mapped_column(
         BigInteger, default=0, server_default="0", nullable=False
+    )
+    auto_disable_on_price_increase: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

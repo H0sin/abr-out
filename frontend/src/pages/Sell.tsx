@@ -1,10 +1,12 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ApiError, Listing, api } from "../api";
-import { EmptyState, SkeletonCard, StatusBadge } from "../components/ui";
+import { EmptyState, Modal, SkeletonCard, StatusBadge } from "../components/ui";
 import { useResource } from "../lib/useApi";
 import { useMe } from "../lib/MeContext";
 import { useToast } from "../lib/toast";
 import { haptic, useMainButton } from "../lib/useTelegram";
+
+const MAX_LISTINGS = 5;
 
 const HOST_RE =
   /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
@@ -32,7 +34,11 @@ export function Sell() {
   const [price, setPrice] = useState("");
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<Listing | null>(null);
   const toast = useToast();
+
+  const usedCount = mine?.length ?? 0;
+  const atCap = usedCount >= MAX_LISTINGS;
 
   const errors = useMemo<Errors>(() => {
     const e: Errors = {};
@@ -58,6 +64,10 @@ export function Sell() {
     e?.preventDefault();
     setTouched({ title: true, host: true, port: true, price: true });
     if (!valid || busy) return;
+    if (atCap) {
+      toast.error(`حداکثر ${MAX_LISTINGS} اوت‌باند مجاز است، یکی را حذف کنید`);
+      return;
+    }
     setBusy(true);
     try {
       await api.createListing({
@@ -87,7 +97,7 @@ export function Sell() {
     text: busy ? "در حال ارسال..." : "ثبت اوت‌باند",
     onClick: () => submit(),
     loading: busy,
-    disabled: !valid || busy,
+    disabled: !valid || busy || atCap,
   });
 
   // Hide MainButton if user navigates away mid-flight (covered by hook cleanup).
@@ -98,6 +108,10 @@ export function Sell() {
       <h2>فروش اوت‌باند</h2>
       <p className="muted" style={{ marginTop: 4 }}>
         اوت‌باند ایران خود را اضافه کنید؛ بلافاصله در مارکت قابل خرید است.
+      </p>
+      <p className="muted" style={{ marginTop: 2, fontSize: 12 }}>
+        ظرفیت ثبت: <span className="num">{usedCount}</span> / {MAX_LISTINGS}
+        {atCap && " — برای ثبت جدید یکی از اوت‌باندها را حذف کنید"}
       </p>
 
       <div className="card mt-3" style={{ borderLeft: "3px solid var(--accent, #2ea3a3)" }}>
@@ -207,12 +221,14 @@ export function Sell() {
         <button
           type="submit"
           className="btn btn-primary mt-2"
-          disabled={!valid || busy}
+          disabled={!valid || busy || atCap}
         >
           {busy ? (
             <>
               <span className="spinner" /> در حال ارسال...
             </>
+          ) : atCap ? (
+            "ظرفیت تکمیل است"
           ) : (
             "ثبت اوت‌باند"
           )}
@@ -249,8 +265,22 @@ export function Sell() {
           <div className="muted mt-2">
             فروش: <span className="num">{l.sales_count}</span>
           </div>
+          <ListingActions
+            listing={l}
+            onEdit={() => setEditing(l)}
+            onChanged={refetch}
+          />
         </article>
       ))}
+
+      <EditListingModal
+        listing={editing}
+        onClose={() => setEditing(null)}
+        onSaved={() => {
+          setEditing(null);
+          refetch();
+        }}
+      />
     </div>
   );
 }
@@ -272,5 +302,217 @@ function Field({
       {children}
       {error && <div className="field-error">{error}</div>}
     </div>
+  );
+}
+
+function ListingActions({
+  listing,
+  onEdit,
+  onChanged,
+}: {
+  listing: Listing;
+  onEdit: () => void;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState<"" | "toggle" | "delete">("");
+  const toast = useToast();
+  const isActive = listing.status === "active";
+  const isDeleted = listing.status === "deleted";
+
+  if (isDeleted) return null;
+
+  async function toggle() {
+    if (busy) return;
+    setBusy("toggle");
+    try {
+      if (isActive) await api.disableListing(listing.id);
+      else await api.enableListing(listing.id);
+      haptic.success();
+      toast.success(isActive ? "اوت‌باند غیرفعال شد" : "اوت‌باند فعال شد");
+      onChanged();
+    } catch (e) {
+      haptic.error();
+      toast.error(e instanceof ApiError ? e.message : "خطا");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function remove() {
+    if (busy) return;
+    if (
+      !window.confirm(
+        "آیا از حذف این اوت‌باند مطمئن هستید؟ تمام کانفیگ‌های خریداران حذف خواهند شد و به آن‌ها اطلاع داده می‌شود.",
+      )
+    )
+      return;
+    setBusy("delete");
+    try {
+      await api.deleteListing(listing.id);
+      haptic.success();
+      toast.success("اوت‌باند حذف شد");
+      onChanged();
+    } catch (e) {
+      haptic.error();
+      toast.error(e instanceof ApiError ? e.message : "خطا");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <div className="row gap-2 mt-2">
+      <button
+        className="btn btn-secondary"
+        style={{ flex: 1 }}
+        onClick={onEdit}
+        disabled={!!busy}
+      >
+        ویرایش
+      </button>
+      <button
+        className="btn btn-secondary"
+        style={{ flex: 1 }}
+        onClick={toggle}
+        disabled={!!busy}
+      >
+        {busy === "toggle" ? "..." : isActive ? "غیرفعال‌سازی" : "فعال‌سازی"}
+      </button>
+      <button
+        className="btn btn-danger"
+        style={{ flex: 1 }}
+        onClick={remove}
+        disabled={!!busy}
+      >
+        {busy === "delete" ? "..." : "حذف"}
+      </button>
+    </div>
+  );
+}
+
+function EditListingModal({
+  listing,
+  onClose,
+  onSaved,
+}: {
+  listing: Listing | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [host, setHost] = useState("");
+  const [price, setPrice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+
+  useEffect(() => {
+    if (listing) {
+      setTitle(listing.title ?? "");
+      setHost(listing.iran_host ?? "");
+      setPrice(String(listing.price_per_gb_usd));
+    }
+  }, [listing]);
+
+  if (!listing) return null;
+
+  const titleValid =
+    title.trim().length >= 2 && /^[A-Za-z0-9 ._-]+$/.test(title.trim());
+  const hostValid = HOST_RE.test(host.trim());
+  const priceNum = parseFloat(price);
+  const priceValid = Number.isFinite(priceNum) && priceNum > 0;
+  const valid = titleValid && hostValid && priceValid;
+
+  async function save() {
+    if (!listing || !valid || busy) return;
+    setBusy(true);
+    try {
+      const body: {
+        title?: string;
+        iran_host?: string;
+        price_per_gb_usd?: number;
+      } = {};
+      if (title.trim() !== (listing.title ?? "")) body.title = title.trim();
+      if (host.trim() !== (listing.iran_host ?? "")) body.iran_host = host.trim();
+      if (priceNum !== parseFloat(String(listing.price_per_gb_usd)))
+        body.price_per_gb_usd = priceNum;
+      if (Object.keys(body).length === 0) {
+        onClose();
+        return;
+      }
+      await api.patchListing(listing.id, body);
+      haptic.success();
+      toast.success("ذخیره شد");
+      onSaved();
+    } catch (e) {
+      haptic.error();
+      toast.error(e instanceof ApiError ? e.message : "خطا در ذخیره");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={listing !== null}
+      onClose={onClose}
+      title={`ویرایش اوت‌باند #${listing.id}`}
+    >
+      <div className="alert alert-info">
+        پورت قابل تغییر نیست. تغییر IP و قیمت برای کانفیگ‌های فعال خریداران
+        اطلاع‌رسانی می‌شود.
+      </div>
+      <div className="field">
+        <label className="field-label">عنوان</label>
+        <input
+          className="input"
+          dir="ltr"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          maxLength={100}
+        />
+      </div>
+      <div className="field">
+        <label className="field-label">IP ایران</label>
+        <input
+          className="input"
+          dir="ltr"
+          value={host}
+          onChange={(e) => setHost(e.target.value.replace(/[^0-9.]/g, ""))}
+          maxLength={15}
+        />
+      </div>
+      <div className="field">
+        <label className="field-label">پورت (غیرقابل تغییر)</label>
+        <input
+          className="input"
+          dir="ltr"
+          value={String(listing.port ?? "")}
+          disabled
+          readOnly
+        />
+      </div>
+      <div className="field">
+        <label className="field-label">قیمت هر GB ($)</label>
+        <input
+          className="input"
+          dir="ltr"
+          inputMode="decimal"
+          value={price}
+          onChange={(e) => setPrice(e.target.value.replace(/[^\d.]/g, ""))}
+        />
+      </div>
+      <div className="modal-actions">
+        <button className="btn" onClick={onClose} disabled={busy}>
+          انصراف
+        </button>
+        <button
+          className="btn btn-primary"
+          onClick={save}
+          disabled={!valid || busy}
+        >
+          {busy ? "در حال ذخیره..." : "ذخیره"}
+        </button>
+      </div>
+    </Modal>
   );
 }

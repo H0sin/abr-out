@@ -189,6 +189,7 @@ function BuyModal({
   const [customExpiry, setCustomExpiry] = useState(false);
   const [customDays, setCustomDays] = useState("");
   const [gb, setGb] = useState<string>("");
+  const [autoDisable, setAutoDisable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<Config | null>(null);
   const [copied, setCopied] = useState(false);
@@ -202,6 +203,7 @@ function BuyModal({
     setCustomExpiry(false);
     setCustomDays("");
     setGb("");
+    setAutoDisable(false);
     setBusy(false);
     setCreated(null);
     setCopied(false);
@@ -248,6 +250,7 @@ function BuyModal({
         name: trimmed,
         expiry_days,
         total_gb_limit,
+        auto_disable_on_price_increase: autoDisable,
       });
       haptic.success();
       toastSuccess("کانفیگ ساخته شد");
@@ -393,6 +396,23 @@ function BuyModal({
               value={gb}
               onChange={(e) => setGb(e.target.value)}
             />
+          </div>
+
+          <div className="field">
+            <label
+              className="row gap-2"
+              style={{ alignItems: "center", cursor: "pointer" }}
+            >
+              <input
+                type="checkbox"
+                checked={autoDisable}
+                onChange={(e) => setAutoDisable(e.target.checked)}
+              />
+              <span>
+                در صورت افزایش قیمت توسط فروشنده، این کانفیگ به‌صورت خودکار
+                غیرفعال شود.
+              </span>
+            </label>
           </div>
 
           <div className="modal-actions">

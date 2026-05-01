@@ -145,6 +145,7 @@ export type Config = {
   last_traffic_bytes: number;
   expiry_at: string | null;
   total_gb_limit: number | null;
+  auto_disable_on_price_increase: boolean;
 };
 
 export type BuyConfigInput = {
@@ -152,6 +153,7 @@ export type BuyConfigInput = {
   name: string;
   expiry_days?: number | null;
   total_gb_limit?: number | null;
+  auto_disable_on_price_increase?: boolean;
 };
 
 export type WithdrawalQuote = {
@@ -246,6 +248,34 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  disableConfig: (id: number) =>
+    request<Config>(`/api/configs/${id}/disable`, { method: "POST" }),
+  enableConfig: (id: number) =>
+    request<Config>(`/api/configs/${id}/enable`, { method: "POST" }),
+  patchConfig: (
+    id: number,
+    body: { name?: string; auto_disable_on_price_increase?: boolean },
+  ) =>
+    request<Config>(`/api/configs/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteConfig: (id: number) =>
+    request<void>(`/api/configs/${id}`, { method: "DELETE" }),
+  patchListing: (
+    id: number,
+    body: { title?: string; iran_host?: string; price_per_gb_usd?: number },
+  ) =>
+    request<Listing>(`/api/listings/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  disableListing: (id: number) =>
+    request<Listing>(`/api/listings/${id}/disable`, { method: "POST" }),
+  enableListing: (id: number) =>
+    request<Listing>(`/api/listings/${id}/enable`, { method: "POST" }),
+  deleteListing: (id: number) =>
+    request<void>(`/api/listings/${id}`, { method: "DELETE" }),
   // ---------- withdrawals ----------
   getWithdrawalQuote: (amount_usd: string | number) =>
     request<WithdrawalQuote>(

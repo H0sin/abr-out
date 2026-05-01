@@ -30,6 +30,11 @@ router = APIRouter(prefix="/api/configs", tags=["configs"])
 # Pay-as-you-go: real billing happens later via the worker.
 MIN_BALANCE_FOR_NEW_CONFIG = Decimal("0.5")
 
+# Hard cap: a single buyer may have at most this many non-deleted
+# configs under one listing. Soft-deleted (DELETE) is the only state
+# that frees a slot.
+MAX_CONFIGS_PER_LISTING_PER_BUYER = 5
+
 # ASCII-only config name: latin letters, digits, space, dash, underscore, dot.
 # Persian/Arabic and other non-ASCII are rejected so that the panel client
 # email (which derives from this name) stays plain ASCII.
@@ -57,6 +62,7 @@ class ConfigOut(BaseModel):
     last_traffic_bytes: int
     expiry_at: datetime | None = None
     total_gb_limit: float | None = None
+    auto_disable_on_price_increase: bool = False
 
 
 class ConfigCreateIn(BaseModel):
@@ -64,6 +70,12 @@ class ConfigCreateIn(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     expiry_days: int | None = Field(default=None, ge=1, le=3650)
     total_gb_limit: float | None = Field(default=None, gt=0, le=100000)
+    auto_disable_on_price_increase: bool = False
+
+
+class ConfigPatchIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    auto_disable_on_price_increase: bool | None = None
 
 
 def _to_out(c: Config, l: Listing, total_used_bytes: int = 0) -> ConfigOut:
@@ -80,6 +92,7 @@ def _to_out(c: Config, l: Listing, total_used_bytes: int = 0) -> ConfigOut:
         total_gb_limit=(
             float(c.total_gb_limit) if c.total_gb_limit is not None else None
         ),
+        auto_disable_on_price_increase=bool(c.auto_disable_on_price_increase),
     )
 
 
@@ -91,7 +104,10 @@ async def list_my_configs(
         result = await session.execute(
             select(Config, Listing)
             .join(Listing, Listing.id == Config.listing_id)
-            .where(Config.buyer_user_id == user.telegram_id)
+            .where(
+                Config.buyer_user_id == user.telegram_id,
+                Config.status != ConfigStatus.deleted,
+            )
             .order_by(Config.created_at.desc())
         )
         rows = result.all()
@@ -159,6 +175,27 @@ async def create_config(
                 detail="listing not provisioned on panel yet (admin action pending)",
             )
 
+        # Per-listing cap for this buyer. ``deleted`` rows do not count.
+        existing_count = (
+            await session.execute(
+                select(func.count())
+                .select_from(Config)
+                .where(
+                    Config.listing_id == listing.id,
+                    Config.buyer_user_id == user.telegram_id,
+                    Config.status != ConfigStatus.deleted,
+                )
+            )
+        ).scalar_one()
+        if int(existing_count) >= MAX_CONFIGS_PER_LISTING_PER_BUYER:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"max {MAX_CONFIGS_PER_LISTING_PER_BUYER} configs per "
+                    "listing for the same buyer; delete one to free a slot"
+                ),
+            )
+
         client_uuid = uuid.uuid4()
         # Panel email = sanitized name + 6-char uuid suffix (panel uniqueness).
         email_safe = re.sub(r"\s+", "_", name)
@@ -211,6 +248,9 @@ async def create_config(
             total_gb_limit=total_gb_limit,
             vless_link=vless_link,
             status=ConfigStatus.active,
+            auto_disable_on_price_increase=bool(
+                body.auto_disable_on_price_increase
+            ),
         )
         session.add(config)
         listing.sales_count = listing.sales_count + 1
@@ -218,3 +258,133 @@ async def create_config(
         await session.refresh(config)
 
     return _to_out(config, listing)
+
+
+# --- Lifecycle: disable / enable / delete / patch ---------------------------
+
+
+async def _load_owned_config(
+    session, config_id: int, user: User
+) -> tuple[Config, Listing]:
+    row = (
+        await session.execute(
+            select(Config, Listing)
+            .join(Listing, Listing.id == Config.listing_id)
+            .where(Config.id == config_id)
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(404, detail="config not found")
+    config, listing = row
+    if config.buyer_user_id != user.telegram_id:
+        raise HTTPException(403, detail="not your config")
+    if config.status == ConfigStatus.deleted:
+        raise HTTPException(404, detail="config not found")
+    return config, listing
+
+
+@router.post("/{config_id}/disable", response_model=ConfigOut)
+async def disable_config(
+    config_id: int,
+    user: User = Depends(current_user),
+) -> ConfigOut:
+    async with SessionLocal() as session:
+        config, listing = await _load_owned_config(session, config_id, user)
+        if config.status == ConfigStatus.disabled:
+            return _to_out(config, listing)
+        if listing.panel_inbound_id is not None:
+            try:
+                async with XuiClient() as xui:
+                    await xui.update_client_enabled(
+                        inbound_id=listing.panel_inbound_id,
+                        client_uuid=config.panel_client_uuid,
+                        email=config.panel_client_email,
+                        enable=False,
+                    )
+            except XuiError as e:
+                logger.warning(
+                    "[configs.disable] panel call failed cfg={} err={}", config.id, e
+                )
+        config.status = ConfigStatus.disabled
+        await session.commit()
+        await session.refresh(config)
+    return _to_out(config, listing)
+
+
+@router.post("/{config_id}/enable", response_model=ConfigOut)
+async def enable_config(
+    config_id: int,
+    user: User = Depends(current_user),
+) -> ConfigOut:
+    async with SessionLocal() as session:
+        config, listing = await _load_owned_config(session, config_id, user)
+        if listing.status != ListingStatus.active:
+            raise HTTPException(
+                409,
+                detail="parent listing is not active; cannot re-enable this config",
+            )
+        if config.status == ConfigStatus.active:
+            return _to_out(config, listing)
+        if listing.panel_inbound_id is not None:
+            try:
+                async with XuiClient() as xui:
+                    await xui.update_client_enabled(
+                        inbound_id=listing.panel_inbound_id,
+                        client_uuid=config.panel_client_uuid,
+                        email=config.panel_client_email,
+                        enable=True,
+                    )
+            except XuiError as e:
+                logger.warning(
+                    "[configs.enable] panel call failed cfg={} err={}", config.id, e
+                )
+        config.status = ConfigStatus.active
+        await session.commit()
+        await session.refresh(config)
+    return _to_out(config, listing)
+
+
+@router.patch("/{config_id}", response_model=ConfigOut)
+async def patch_config(
+    config_id: int,
+    body: ConfigPatchIn,
+    user: User = Depends(current_user),
+) -> ConfigOut:
+    async with SessionLocal() as session:
+        config, listing = await _load_owned_config(session, config_id, user)
+        if body.name is not None:
+            new_name = _sanitize_name(body.name)
+            if not new_name:
+                raise HTTPException(422, detail="invalid name")
+            config.name = new_name
+        if body.auto_disable_on_price_increase is not None:
+            config.auto_disable_on_price_increase = bool(
+                body.auto_disable_on_price_increase
+            )
+        await session.commit()
+        await session.refresh(config)
+    return _to_out(config, listing)
+
+
+@router.delete("/{config_id}", status_code=204)
+async def delete_config(
+    config_id: int,
+    user: User = Depends(current_user),
+) -> None:
+    async with SessionLocal() as session:
+        config, listing = await _load_owned_config(session, config_id, user)
+        if listing.panel_inbound_id is not None:
+            try:
+                async with XuiClient() as xui:
+                    await xui.delete_client(
+                        listing.panel_inbound_id, config.panel_client_uuid
+                    )
+            except XuiError as e:
+                logger.warning(
+                    "[configs.delete] panel delClient failed cfg={} err={}",
+                    config.id,
+                    e,
+                )
+        config.status = ConfigStatus.deleted
+        config.deleted_at = datetime.now(timezone.utc)
+        await session.commit()

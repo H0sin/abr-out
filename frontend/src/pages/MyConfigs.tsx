@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { Config, api } from "../api";
+import { ApiError, Config, api } from "../api";
 import { EmptyState, Modal, SkeletonCard, StatusBadge } from "../components/ui";
 import { CopyIcon, RefreshIcon } from "../components/icons";
 import { useResource } from "../lib/useApi";
@@ -175,6 +175,8 @@ export function MyConfigs() {
               QR
             </button>
           </div>
+
+          <ConfigActions config={c} onChanged={refetch} />
         </article>
       ))}
 
@@ -213,5 +215,111 @@ export function MyConfigs() {
         )}
       </Modal>
     </div>
+  );
+}
+
+function ConfigActions({
+  config,
+  onChanged,
+}: {
+  config: Config;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState<"" | "toggle" | "delete" | "flag">("");
+  const toast = useToast();
+  const isActive = config.status === "active";
+  const isDisabled = config.status === "disabled";
+
+  async function toggle() {
+    if (busy) return;
+    setBusy("toggle");
+    try {
+      if (isActive) await api.disableConfig(config.id);
+      else await api.enableConfig(config.id);
+      haptic.success();
+      toast.success(isActive ? "کانفیگ غیرفعال شد" : "کانفیگ فعال شد");
+      onChanged();
+    } catch (e) {
+      haptic.error();
+      toast.error(e instanceof ApiError ? e.message : "خطا");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function remove() {
+    if (busy) return;
+    if (!window.confirm("این کانفیگ حذف شود؟")) return;
+    setBusy("delete");
+    try {
+      await api.deleteConfig(config.id);
+      haptic.success();
+      toast.success("حذف شد");
+      onChanged();
+    } catch (e) {
+      haptic.error();
+      toast.error(e instanceof ApiError ? e.message : "خطا");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function toggleFlag(checked: boolean) {
+    if (busy) return;
+    setBusy("flag");
+    try {
+      await api.patchConfig(config.id, {
+        auto_disable_on_price_increase: checked,
+      });
+      onChanged();
+    } catch (e) {
+      haptic.error();
+      toast.error(e instanceof ApiError ? e.message : "خطا");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <>
+      <div className="row gap-2 mt-2">
+        {!(config.status === "deleted") && (
+          <button
+            className="btn btn-secondary"
+            style={{ flex: 1 }}
+            onClick={toggle}
+            disabled={!!busy}
+          >
+            {busy === "toggle"
+              ? "..."
+              : isActive
+              ? "غیرفعال‌سازی"
+              : isDisabled
+              ? "فعال‌سازی"
+              : "—"}
+          </button>
+        )}
+        <button
+          className="btn btn-danger"
+          style={{ flex: 1 }}
+          onClick={remove}
+          disabled={!!busy}
+        >
+          {busy === "delete" ? "..." : "حذف"}
+        </button>
+      </div>
+      <label
+        className="row gap-2 mt-2 muted"
+        style={{ alignItems: "center", fontSize: 13, cursor: "pointer" }}
+      >
+        <input
+          type="checkbox"
+          checked={config.auto_disable_on_price_increase}
+          onChange={(e) => toggleFlag(e.target.checked)}
+          disabled={!!busy}
+        />
+        <span>در صورت افزایش قیمت توسط فروشنده، خودکار غیرفعال شود</span>
+      </label>
+    </>
   );
 }
