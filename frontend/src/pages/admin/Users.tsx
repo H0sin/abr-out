@@ -8,8 +8,8 @@ function fmtUsd(raw: string): string {
   const n = parseFloat(raw);
   if (!Number.isFinite(n)) return raw;
   return n.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4,
   });
 }
 

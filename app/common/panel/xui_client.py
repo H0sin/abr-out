@@ -162,22 +162,45 @@ class XuiClient:
         return body.get("obj") or []
 
     async def add_vless_tcp_inbound(
-        self, port: int, remark: str
+        self,
+        port: int,
+        remark: str,
+        external_host: str | None = None,
+        external_port: int | None = None,
     ) -> dict[str, Any]:
-        """Create a VLESS TCP plain inbound. Returns the created inbound dict."""
+        """Create a VLESS TCP plain inbound. Returns the created inbound dict.
+
+        If ``external_host`` is provided, the inbound's streamSettings will
+        include an ``externalProxy`` entry pointing at ``external_host:external_port``
+        (defaulting ``external_port`` to ``port``). 3x-ui uses this to build
+        subscription links that route via the seller's Iran-side proxy.
+        """
         logger.info(
-            "[xui] add_vless_tcp_inbound port={} remark={!r}", port, remark
+            "[xui] add_vless_tcp_inbound port={} remark={!r} external_host={} external_port={}",
+            port,
+            remark,
+            external_host,
+            external_port,
         )
         settings_obj = {
             "clients": [],
             "decryption": "none",
             "fallbacks": [],
         }
-        stream_settings = {
+        stream_settings: dict[str, Any] = {
             "network": "tcp",
             "security": "none",
             "tcpSettings": {"header": {"type": "none"}},
         }
+        if external_host:
+            stream_settings["externalProxy"] = [
+                {
+                    "forceTls": "same",
+                    "dest": external_host,
+                    "port": int(external_port or port),
+                    "remark": "",
+                }
+            ]
         payload = {
             "up": 0,
             "down": 0,

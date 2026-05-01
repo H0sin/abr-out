@@ -16,20 +16,27 @@ BTN_OPEN_APP = "🛒 خرید و فروش اوت‌باند"
 BTN_WALLET = "👛 کیف پول"
 BTN_TOPUP = "💳 افزایش موجودی"
 BTN_SUPPORT = "📨 پشتیبانی"
+BTN_WALLET_HUB = "💼 واریز / برداشت / کیف پول"
+BTN_HUB_DEPOSIT = "💳 واریز"
+BTN_HUB_WITHDRAW = "🏧 برداشت"
+BTN_HUB_HISTORY = "📜 تراکنش‌ها"
 
 # Callback identifiers.
 CB_WALLET = "menu:wallet"
 CB_TOPUP = "menu:topup"
 CB_SUPPORT = "menu:support"
+CB_WALLET_HUB = "menu:wallet_hub"
 
 
-def _miniapp_url() -> str | None:
-    """Return the public Mini App URL with a cache-busting `?v=` suffix.
-    Returns None when the public URL is not configured."""
+def _miniapp_url(route: str = "") -> str | None:
+    """Return the public Mini App URL with a cache-busting `?v=` suffix and an
+    optional hash route (e.g. ``"/withdraw"``). Returns None when the public
+    URL is not configured."""
     base = get_settings().public_base_url
     if not base:
         return None
-    return f"{base}/app/?v={int(time.time())}"
+    suffix = f"#{route}" if route else ""
+    return f"{base}/app/?v={int(time.time())}{suffix}"
 
 
 def main_menu_inline() -> InlineKeyboardMarkup:
@@ -48,11 +55,40 @@ def main_menu_inline() -> InlineKeyboardMarkup:
 
     rows.append(
         [
-            InlineKeyboardButton(text=BTN_WALLET, callback_data=CB_WALLET),
-            InlineKeyboardButton(text=BTN_TOPUP, callback_data=CB_TOPUP),
+            InlineKeyboardButton(text=BTN_WALLET_HUB, callback_data=CB_WALLET_HUB),
         ]
     )
     rows.append([InlineKeyboardButton(text=BTN_SUPPORT, callback_data=CB_SUPPORT)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def wallet_hub_inline() -> InlineKeyboardMarkup:
+    """Sub-menu shown after the user taps the unified Wallet hub button.
+
+    «واریز» reuses the existing top-up FSM via callback. «برداشت» and
+    «تراکنش‌ها» are WebApp buttons that deep-link directly into the Mini
+    App's hash routes so the user lands on the right page in one tap.
+    """
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text=BTN_HUB_DEPOSIT, callback_data=CB_TOPUP)]
+    ]
+    withdraw_url = _miniapp_url("/withdraw")
+    history_url = _miniapp_url("/wallet")
+    second_row: list[InlineKeyboardButton] = []
+    if withdraw_url:
+        second_row.append(
+            InlineKeyboardButton(
+                text=BTN_HUB_WITHDRAW, web_app=WebAppInfo(url=withdraw_url)
+            )
+        )
+    if history_url:
+        second_row.append(
+            InlineKeyboardButton(
+                text=BTN_HUB_HISTORY, web_app=WebAppInfo(url=history_url)
+            )
+        )
+    if second_row:
+        rows.append(second_row)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

@@ -79,6 +79,30 @@ class BroadcastStatus(str, enum.Enum):
     failed = "failed"
 
 
+class WithdrawalStatus(str, enum.Enum):
+    pending = "pending"
+    submitting = "submitting"
+    submitted = "submitted"
+    confirmed = "confirmed"
+    failed = "failed"
+    refunded = "refunded"
+
+
+class WithdrawalSource(str, enum.Enum):
+    manual = "manual"
+    auto = "auto"
+
+
+class AutoWithdrawMode(str, enum.Enum):
+    time = "time"
+    threshold = "threshold"
+
+
+class AutoWithdrawAmountPolicy(str, enum.Enum):
+    full = "full"
+    fixed = "fixed"
+
+
 # --- Tables ---
 
 
@@ -468,3 +492,98 @@ class Broadcast(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WithdrawalRequest(Base):
+    """A user-initiated USDT-BSC withdrawal from their wallet balance.
+
+    Lifecycle: pending → submitting → submitted → confirmed | failed → refunded.
+    The matching ledger entries are a ``payout`` debit at request time and a
+    ``refund`` credit if the on-chain send fails.
+    """
+
+    __tablename__ = "withdrawal_requests"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.telegram_id", ondelete="CASCADE"), nullable=False
+    )
+    amount_usd: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
+    fee_usd: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
+    net_usdt: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
+    to_address: Mapped[str] = mapped_column(String(64), nullable=False)
+    chain: Mapped[str] = mapped_column(String(16), default="BSC", nullable=False)
+    asset: Mapped[str] = mapped_column(String(16), default="USDT", nullable=False)
+    status: Mapped[WithdrawalStatus] = mapped_column(
+        Enum(WithdrawalStatus, name="withdrawal_status"),
+        default=WithdrawalStatus.pending,
+        nullable=False,
+    )
+    source: Mapped[WithdrawalSource] = mapped_column(
+        Enum(WithdrawalSource, name="withdrawal_source"),
+        default=WithdrawalSource.manual,
+        nullable=False,
+    )
+    tx_hash: Mapped[str | None] = mapped_column(String(80))
+    error_msg: Mapped[str | None] = mapped_column(Text)
+    gas_price_wei: Mapped[Decimal | None] = mapped_column(Numeric(40, 0))
+    gas_used: Mapped[int | None] = mapped_column(Integer)
+    idempotency_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_withdrawal_requests_user_status", "user_id", "status"),
+        Index("ix_withdrawal_requests_status_created", "status", "created_at"),
+    )
+
+
+class AutoWithdrawalConfig(Base):
+    """Per-user auto-withdraw rule. One row per user (PK = user_id)."""
+
+    __tablename__ = "auto_withdrawal_configs"
+
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("users.telegram_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    mode: Mapped[AutoWithdrawMode] = mapped_column(
+        Enum(AutoWithdrawMode, name="auto_withdraw_mode"), nullable=False
+    )
+    interval_hours: Mapped[int | None] = mapped_column(Integer)
+    threshold_usd: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    amount_policy: Mapped[AutoWithdrawAmountPolicy] = mapped_column(
+        Enum(AutoWithdrawAmountPolicy, name="auto_withdraw_amount_policy"),
+        nullable=False,
+    )
+    fixed_amount_usd: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    to_address: Mapped[str] = mapped_column(String(64), nullable=False)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_withdrawal_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("withdrawal_requests.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_auto_withdrawal_configs_enabled", "enabled"),
+    )

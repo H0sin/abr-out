@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
 from app.api.deps import current_user
@@ -14,16 +15,24 @@ from app.common.panel.xui_client import XuiClient, XuiError
 
 router = APIRouter(prefix="/api/listings", tags=["listings"])
 
+# ASCII-only remark/title: latin letters, digits, space, dash, underscore, dot.
+# Persian/Arabic and other non-ASCII are rejected so that 3x-ui inbound remarks
+# (and downstream client emails) never contain RTL text or non-ASCII bytes.
+_ASCII_TITLE_RE = re.compile(r"^[A-Za-z0-9 ._-]+$")
+
 
 class ListingOut(BaseModel):
     id: int
-    title: str
-    iran_host: str
-    port: int
+    # title/iran_host/seller_username are seller-identifying; the marketplace
+    # browse endpoint blanks them out so buyers cannot reach sellers off-bot.
+    # The seller's own /mine view and the create response still populate them.
+    title: str | None = None
+    iran_host: str | None = None
+    port: int | None = None
     price_per_gb_usd: Decimal
     avg_ping_ms: int | None
     sales_count: int
-    seller_username: str | None
+    seller_username: str | None = None
     status: str
 
 
@@ -32,6 +41,16 @@ class ListingCreateIn(BaseModel):
     iran_host: str = Field(min_length=3, max_length=255)
     port: int = Field(ge=1, le=65535)
     price_per_gb_usd: Decimal = Field(gt=0)
+
+    @field_validator("title")
+    @classmethod
+    def _ascii_title(cls, v: str) -> str:
+        v = v.strip()
+        if not _ASCII_TITLE_RE.fullmatch(v):
+            raise ValueError(
+                "title must be English letters, digits, space, dot, dash, or underscore"
+            )
+        return v
 
 
 @router.get("", response_model=list[ListingOut])
@@ -47,19 +66,18 @@ async def list_active(
             .order_by(Listing.price_per_gb_usd.asc())
         )
         rows = result.all()
+    # Hide seller-identifying fields (title/iran_host/port/seller_username)
+    # so a buyer cannot match a listing back to the seller's Telegram or
+    # external IP and contact them outside the bot.
     return [
         ListingOut(
             id=l.id,
-            title=l.title,
-            iran_host=l.iran_host,
-            port=l.port,
             price_per_gb_usd=l.price_per_gb_usd,
             avg_ping_ms=l.avg_ping_ms,
             sales_count=l.sales_count,
-            seller_username=u.username,
             status=l.status.value,
         )
-        for (l, u) in rows
+        for (l, _u) in rows
     ]
 
 
@@ -123,7 +141,10 @@ async def create_listing(
     try:
         async with XuiClient() as xui:
             inbound = await xui.add_vless_tcp_inbound(
-                port=body.port, remark=body.title
+                port=body.port,
+                remark=body.title,
+                external_host=body.iran_host,
+                external_port=body.port,
             )
         raw_id = inbound.get("id")
         if raw_id is None:

@@ -7,9 +7,11 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.common.logging import logger, setup_logging
 from app.common.settings import get_settings
 from app.worker.jobs.aggregate_ping import aggregate_pings_once
+from app.worker.jobs.auto_withdraw import auto_withdraw_once
 from app.worker.jobs.broadcast import broadcast_tick
 from app.worker.jobs.enforce_balance import enforce_balances_once
 from app.worker.jobs.poll_traffic import poll_traffic_once
+from app.worker.jobs.process_withdrawals import process_withdrawals_once
 
 
 async def main() -> None:
@@ -47,6 +49,23 @@ async def main() -> None:
         "interval",
         seconds=5,
         id="broadcast",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    scheduler.add_job(
+        process_withdrawals_once,
+        "interval",
+        seconds=30,
+        id="process_withdrawals",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        auto_withdraw_once,
+        "interval",
+        seconds=60,
+        id="auto_withdraw",
         max_instances=1,
         coalesce=True,
     )

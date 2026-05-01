@@ -8,6 +8,15 @@ import { haptic, useMainButton } from "../lib/useTelegram";
 const HOST_RE =
   /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|[01]?\d?\d)){3}|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,})$/i;
 
+function fmtUsd(raw: string | number): string {
+  const n = typeof raw === "number" ? raw : parseFloat(raw);
+  if (!Number.isFinite(n)) return String(raw);
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4,
+  });
+}
+
 type Errors = Partial<Record<"title" | "host" | "port" | "price", string>>;
 
 export function Sell() {
@@ -26,6 +35,8 @@ export function Sell() {
     const e: Errors = {};
     if (!title.trim()) e.title = "عنوان الزامی است";
     else if (title.length > 100) e.title = "حداکثر ۱۰۰ کاراکتر";
+    else if (!/^[A-Za-z0-9 ._-]+$/.test(title.trim()))
+      e.title = "فقط حروف انگلیسی، عدد، فاصله، نقطه و خط تیره";
     if (!host.trim()) e.host = "هاست/IP الزامی است";
     else if (!HOST_RE.test(host.trim())) e.host = "آدرس معتبر وارد کنید";
     const p = parseInt(port, 10);
@@ -94,11 +105,12 @@ export function Sell() {
           <input
             className={"input" + (touched.title && errors.title ? " invalid" : "")}
             type="text"
+            dir="ltr"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             onBlur={() => setTouched((t) => ({ ...t, title: true }))}
             maxLength={100}
-            placeholder="مثلاً: تهران - مخابرات"
+            placeholder="e.g. Tehran-MCI"
           />
         </Field>
 
@@ -193,7 +205,7 @@ export function Sell() {
               >
                 {l.iran_host}:{l.port}
                 <span style={{ margin: "0 6px" }}>•</span>
-                {l.price_per_gb_usd}$/GB
+                {fmtUsd(l.price_per_gb_usd)}$/GB
               </div>
             </div>
             <StatusBadge status={l.status} />

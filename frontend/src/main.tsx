@@ -6,6 +6,7 @@ import { Browse } from "./pages/Browse";
 import { MyConfigs } from "./pages/MyConfigs";
 import { Sell } from "./pages/Sell";
 import { Wallet } from "./pages/Wallet";
+import { Withdraw } from "./pages/Withdraw";
 import { AdminLayout } from "./pages/admin/AdminLayout";
 import { AdminHome } from "./pages/admin/Home";
 import { AdminUsers } from "./pages/admin/Users";
@@ -123,6 +124,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="my" element={<MyConfigs />} />
                 <Route path="sell" element={<Sell />} />
                 <Route path="wallet" element={<Wallet />} />
+                <Route path="withdraw" element={<Withdraw />} />
                 <Route path="admin" element={<AdminLayout />}>
                   <Route index element={<AdminHome />} />
                   <Route path="users" element={<AdminUsers />} />

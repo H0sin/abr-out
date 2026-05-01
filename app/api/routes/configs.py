@@ -30,15 +30,20 @@ router = APIRouter(prefix="/api/configs", tags=["configs"])
 # Pay-as-you-go: real billing happens later via the worker.
 MIN_BALANCE_FOR_NEW_CONFIG = Decimal("0.5")
 
-# Allow latin word chars, digits, dash/underscore/space, and Persian/Arabic range.
-_NAME_DISALLOWED = re.compile(r"[^\w\u0600-\u06FF\- ]+")
+# ASCII-only config name: latin letters, digits, space, dash, underscore, dot.
+# Persian/Arabic and other non-ASCII are rejected so that the panel client
+# email (which derives from this name) stays plain ASCII.
+_NAME_ALLOWED = re.compile(r"^[A-Za-z0-9 ._-]+$")
 _NAME_MAX_LEN = 32
 
 
 def _sanitize_name(raw: str) -> str:
-    s = _NAME_DISALLOWED.sub("", raw or "").strip()
+    s = (raw or "").strip()
     s = re.sub(r"\s+", " ", s)
-    return s[:_NAME_MAX_LEN]
+    s = s[:_NAME_MAX_LEN]
+    if not s or not _NAME_ALLOWED.fullmatch(s):
+        return ""
+    return s
 
 
 class ConfigOut(BaseModel):

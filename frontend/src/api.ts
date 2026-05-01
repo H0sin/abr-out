@@ -112,9 +112,12 @@ function qs(params: Record<string, string | number | undefined | null>): string 
 
 export type Listing = {
   id: number;
-  title: string;
-  iran_host: string;
-  port: number;
+  // Optional: the marketplace browse endpoint hides seller-identifying
+  // fields (title/iran_host/port/seller_username). They are populated only
+  // for the seller's own /mine view and the create response.
+  title?: string | null;
+  iran_host?: string | null;
+  port?: number | null;
   price_per_gb_usd: string;
   avg_ping_ms: number | null;
   sales_count: number;
@@ -140,6 +143,66 @@ export type BuyConfigInput = {
   name: string;
   expiry_days?: number | null;
   total_gb_limit?: number | null;
+};
+
+export type WithdrawalQuote = {
+  amount_usd: string;
+  fee_usd: string;
+  net_usdt: string;
+  gas_price_wei: number;
+};
+
+export type Withdrawal = {
+  id: number;
+  user_id: number;
+  amount_usd: string;
+  fee_usd: string;
+  net_usdt: string;
+  to_address: string;
+  chain: string;
+  asset: string;
+  status:
+    | "pending"
+    | "submitting"
+    | "submitted"
+    | "confirmed"
+    | "failed"
+    | "refunded";
+  source: "manual" | "auto";
+  tx_hash: string | null;
+  error_msg: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WithdrawalsPage = {
+  items: Withdrawal[];
+  total: number;
+  page: number;
+  size: number;
+};
+
+export type AutoWithdrawConfig = {
+  enabled: boolean;
+  mode: "time" | "threshold";
+  interval_hours: number | null;
+  threshold_usd: string | null;
+  amount_policy: "full" | "fixed";
+  fixed_amount_usd: string | null;
+  to_address: string;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_withdrawal_id: number | null;
+};
+
+export type AutoWithdrawInput = {
+  enabled: boolean;
+  mode: "time" | "threshold";
+  interval_hours?: number | null;
+  threshold_usd?: string | number | null;
+  amount_policy: "full" | "fixed";
+  fixed_amount_usd?: string | number | null;
+  to_address: string;
 };
 
 export const api = {
@@ -173,6 +236,36 @@ export const api = {
     request<Config>("/api/configs", {
       method: "POST",
       body: JSON.stringify(body),
+    }),
+  // ---------- withdrawals ----------
+  getWithdrawalQuote: (amount_usd: string | number) =>
+    request<WithdrawalQuote>(
+      `/api/withdrawals/quote${qs({ amount_usd: String(amount_usd) })}`,
+    ),
+  createWithdrawal: (body: { amount_usd: string | number; to_address: string }) =>
+    request<Withdrawal>("/api/withdrawals", {
+      method: "POST",
+      body: JSON.stringify({
+        amount_usd: String(body.amount_usd),
+        to_address: body.to_address,
+      }),
+    }),
+  listWithdrawals: (params: { page?: number; size?: number } = {}) =>
+    request<WithdrawalsPage>(
+      `/api/withdrawals${qs({ page: params.page, size: params.size })}`,
+    ),
+  getWithdrawal: (id: number) =>
+    request<Withdrawal>(`/api/withdrawals/${id}`),
+  getAutoWithdraw: () =>
+    request<AutoWithdrawConfig | null>("/api/withdrawals/auto/config"),
+  saveAutoWithdraw: (body: AutoWithdrawInput) =>
+    request<AutoWithdrawConfig>("/api/withdrawals/auto/config", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  disableAutoWithdraw: () =>
+    request<AutoWithdrawConfig | null>("/api/withdrawals/auto/config", {
+      method: "DELETE",
     }),
 };
 

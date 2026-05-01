@@ -13,10 +13,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.bot.keyboards import (
     CB_SUPPORT,
     CB_WALLET,
+    CB_WALLET_HUB,
     admin_user_panel,
     hide_reply_keyboard,
     main_menu_inline,
     support_reply_kb,
+    wallet_hub_inline,
 )
 from app.common.db.models import SupportDirection, SupportMessage, User
 from app.common.db.session import SessionLocal
@@ -143,6 +145,7 @@ async def _notify_admins_new_user(user: User | None) -> None:
             )
 
 
+@router.callback_query(F.data == CB_WALLET_HUB)
 @router.callback_query(F.data == CB_WALLET)
 async def on_wallet(cb: CallbackQuery) -> None:
     if cb.from_user is None or cb.message is None:
@@ -155,8 +158,9 @@ async def on_wallet(cb: CallbackQuery) -> None:
         balance = await get_balance(session, cb.from_user.id)
 
     await cb.message.answer(
-        f"💵 موجودی کیف پول: <b>{balance:.4f} USD</b>",
-        reply_markup=main_menu_inline(),
+        f"💼 موجودی شما: <b>{balance:.4f} USD</b>\n"
+        f"چه کاری می‌خواهی انجام بدی؟",
+        reply_markup=wallet_hub_inline(),
     )
     await cb.answer()
 

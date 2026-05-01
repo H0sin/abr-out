@@ -11,6 +11,15 @@ import { haptic, openTelegramLink } from "../lib/useTelegram";
 
 type SortKey = "price" | "ping" | "sales";
 
+function fmtUsd(raw: string | number): string {
+  const n = typeof raw === "number" ? raw : parseFloat(raw);
+  if (!Number.isFinite(n)) return String(raw);
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4,
+  });
+}
+
 const MIN_BALANCE = 0.5;
 const EXPIRY_PRESETS: { label: string; days: number | null }[] = [
   { label: "نامحدود", days: null },
@@ -45,8 +54,10 @@ export function Browse() {
 
   return (
     <div>
-      <header className="row" style={{ marginBottom: 12 }}>
-        <h2>مارکت‌پلیس</h2>
+      <header className="row" style={{ marginBottom: 12, alignItems: "center" }}>
+        <p className="muted" style={{ margin: 0, flex: 1 }}>
+          اوت‌باندهای فعال — مرتب‌سازی خود را انتخاب کنید
+        </p>
         <button
           className="chip"
           onClick={() => {
@@ -58,9 +69,6 @@ export function Browse() {
           <RefreshIcon />
         </button>
       </header>
-      <p className="muted" style={{ marginTop: 0 }}>
-        اوت‌باندهای فعال — مرتب‌سازی خود را انتخاب کنید
-      </p>
 
       <div className="chips">
         <SortChip active={sort === "price"} onClick={() => setSort("price")}>
@@ -104,30 +112,17 @@ export function Browse() {
                   textOverflow: "ellipsis",
                 }}
               >
-                {l.title}
-              </div>
-              <div
-                className="muted"
-                style={{ direction: "ltr", textAlign: "right", marginTop: 2 }}
-              >
-                {l.iran_host}
-                <span style={{ opacity: 0.6 }}>:</span>
-                {l.port}
+                اوت‌باند <span className="num">#{l.id}</span>
               </div>
               <div className="row gap-2 mt-2" style={{ justifyContent: "flex-start" }}>
                 <PingPill ms={l.avg_ping_ms} />
                 <span className="badge">
                   <span className="num">{l.sales_count}</span> فروش
                 </span>
-                {l.seller_username && (
-                  <span className="muted" style={{ direction: "ltr" }}>
-                    @{l.seller_username}
-                  </span>
-                )}
               </div>
             </div>
             <div className="price-tag">
-              <span className="num-big num">{l.price_per_gb_usd}</span>
+              <span className="num-big num">{fmtUsd(l.price_per_gb_usd)}</span>
               <span className="num-small">$/GB</span>
             </div>
           </div>
@@ -210,6 +205,10 @@ function BuyModal({
       toastError("نام کانفیگ را وارد کنید");
       return;
     }
+    if (!/^[A-Za-z0-9 ._-]+$/.test(trimmed)) {
+      toastError("نام فقط با حروف انگلیسی، عدد، فاصله، نقطه و خط تیره");
+      return;
+    }
     let total_gb_limit: number | null = null;
     if (gb.trim()) {
       const n = parseFloat(gb);
@@ -259,7 +258,7 @@ function BuyModal({
       title={
         step === "result"
           ? "کانفیگ ساخته شد"
-          : `خرید از ${listing.title}`
+          : `خرید اوت‌باند #${listing.id}`
       }
     >
       {step === "form" && insufficient && (
@@ -269,7 +268,7 @@ function BuyModal({
             شارژ کنی.
           </div>
           <div className="muted" style={{ marginTop: 6 }}>
-            موجودی فعلی: <span className="num">{balance.toFixed(2)}</span>$
+            موجودی فعلی: <span className="num">{fmtUsd(balance)}</span>$
           </div>
           <div className="modal-actions">
             <button className="btn" onClick={onClose}>
@@ -291,8 +290,8 @@ function BuyModal({
       {step === "form" && !insufficient && (
         <div>
           <div className="muted" style={{ marginBottom: 4 }}>
-            قیمت: <span className="num">{listing.price_per_gb_usd}</span>$ / گیگ
-            — موجودی: <span className="num">{balance.toFixed(2)}</span>$
+            قیمت: <span className="num">{fmtUsd(listing.price_per_gb_usd)}</span>$ / گیگ
+            — موجودی: <span className="num">{fmtUsd(balance)}</span>$
           </div>
 
           <div className="field">
@@ -300,10 +299,14 @@ function BuyModal({
             <input
               type="text"
               maxLength={32}
-              placeholder="مثلاً موبایل یا لپ‌تاپ"
+              dir="ltr"
+              placeholder="e.g. mobile or laptop"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
+            <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+              فقط حروف انگلیسی، عدد، فاصله، نقطه و خط تیره
+            </div>
           </div>
 
           <div className="field">

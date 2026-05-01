@@ -36,7 +36,7 @@ function formatAmount(raw: string): { sign: "+" | "-" | ""; abs: string } {
   return {
     sign,
     abs: Math.abs(n).toLocaleString("en-US", {
-      minimumFractionDigits: 2,
+      minimumFractionDigits: 0,
       maximumFractionDigits: 4,
     }),
   };

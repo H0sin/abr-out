@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import admin, configs, listings, me, prober, webhook
+from app.api.routes import admin, configs, listings, me, prober, webhook, withdrawals
 from app.common.logging import setup_logging
 
 setup_logging()
@@ -32,6 +32,7 @@ app.include_router(admin.router)
 app.include_router(me.router)
 app.include_router(listings.router)
 app.include_router(configs.router)
+app.include_router(withdrawals.router)
 
 
 @app.get("/health")

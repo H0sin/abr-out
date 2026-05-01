@@ -50,6 +50,25 @@ class Settings(BaseSettings):
     nowpayments_api_key: str = ""
     nowpayments_ipn_secret: str = ""
 
+    # --- USDT-BSC withdrawals ---
+    # Public BSC RPC (mainnet by default; switch to testnet for staging).
+    bsc_rpc_url: str = "https://bsc-dataseed1.binance.org"
+    # Hex private key (with or without 0x prefix) of the hot wallet that
+    # holds USDT-BSC + BNB-for-gas. Empty disables withdrawals.
+    bsc_hot_wallet_private_key: str = ""
+    # USDT (BEP20) contract on BSC mainnet. Override for testnet deploys.
+    bsc_usdt_contract: str = "0x55d398326f99059fF775485246999027B3197955"
+    # Floor on a single withdrawal request, in USD.
+    withdrawal_min_usd: Decimal = Decimal("1")
+    # Gas units used by a BEP20 ``transfer`` (slightly above 21k+~30k typical).
+    withdrawal_gas_limit: int = 80000
+    # Multiplier on the gas estimate to absorb price spikes between quote and broadcast.
+    withdrawal_fee_buffer_pct: Decimal = Decimal("1.20")
+    # BNB/USDT live ticker used to convert gas (BNB) to USD for the fee quote.
+    bnb_price_feed_url: str = (
+        "https://api.binance.com/api/v3/ticker/price?symbol=BNBUSDT"
+    )
+
     # Public URL settings.
     # Set DOMAIN to your Cloudflare-fronted domain (e.g. example.com).
     # webhook_base_url is auto-derived as https://{domain} unless overridden.

@@ -8,8 +8,8 @@ function formatUsd(raw: string): string {
   const n = parseFloat(raw);
   if (!Number.isFinite(n)) return raw;
   return n.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4,
   });
 }
 
@@ -30,8 +30,6 @@ export function Wallet() {
 
   return (
     <div>
-      <h2>کیف پول</h2>
-
       {error && (
         <div className="alert alert-error mt-2">
           {error}{" "}
@@ -98,14 +96,29 @@ export function Wallet() {
           </div>
 
           <div className="card">
-            <div className="title">افزایش موجودی</div>
+            <div className="title">واریز و برداشت</div>
             <p className="muted mt-2">
-              برای شارژ کیف پول، به ربات بازگردید و گزینه «💰 افزایش موجودی» را
-              انتخاب کنید. پرداخت با ارز دیجیتال از طریق NowPayments انجام می‌شود.
+              برای شارژ کیف پول به ربات بازگردید و گزینه «💳 واریز» را انتخاب
+              کنید (ارز دیجیتال از طریق NowPayments). برای برداشت USDT روی شبکهٔ
+              BSC از دکمهٔ زیر استفاده کنید.
             </p>
-            <button className="btn btn-primary mt-3" onClick={close}>
-              بازگشت به ربات
-            </button>
+            <div className="row mt-3" style={{ gap: 8 }}>
+              <button className="btn btn-ghost" onClick={close} style={{ flex: 1 }}>
+                بازگشت به ربات
+              </button>
+              <Link
+                to="/withdraw"
+                onClick={() => haptic.selection()}
+                className="btn btn-primary"
+                style={{
+                  flex: 1,
+                  textDecoration: "none",
+                  textAlign: "center",
+                }}
+              >
+                برداشت USDT
+              </Link>
+            </div>
           </div>
 
           {me.is_admin && (
