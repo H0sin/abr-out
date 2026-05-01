@@ -584,7 +584,7 @@ async def patch_listing(
     return _listing_to_out(listing, user.username)
 
 
-@router.delete("/{listing_id}", status_code=204)
+@router.delete("/{listing_id}", status_code=204, response_model=None)
 async def delete_listing(
     listing_id: int,
     user: User = Depends(current_user),

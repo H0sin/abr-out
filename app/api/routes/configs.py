@@ -366,7 +366,7 @@ async def patch_config(
     return _to_out(config, listing)
 
 
-@router.delete("/{config_id}", status_code=204)
+@router.delete("/{config_id}", status_code=204, response_model=None)
 async def delete_config(
     config_id: int,
     user: User = Depends(current_user),
