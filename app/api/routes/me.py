@@ -25,6 +25,10 @@ class MeOut(BaseModel):
     is_admin: bool
     is_blocked: bool
     bot_username: str | None = None
+    # Public hostname of our foreign 3x-ui panel; sellers point their
+    # Iranian-side tunnel inbound at this address. Surfaced here so the
+    # frontend can show seller instructions without baking it into the bundle.
+    tunnel_target_host: str | None = None
 
 
 class TransactionOut(BaseModel):
@@ -70,6 +74,7 @@ async def me(user: User = Depends(current_user)) -> MeOut:
         is_admin=user.telegram_id in get_settings().admin_ids,
         is_blocked=user.is_blocked,
         bot_username=(get_settings().bot_username or None),
+        tunnel_target_host=(get_settings().xui_panel_host_public or None),
     )
 
 

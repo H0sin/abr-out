@@ -72,6 +72,7 @@ export type Me = {
   is_admin: boolean;
   is_blocked: boolean;
   bot_username: string | null;
+  tunnel_target_host: string | null;
 };
 
 export type Transaction = {

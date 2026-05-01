@@ -25,6 +25,13 @@ router = APIRouter(prefix="/api/listings", tags=["listings"])
 # Persian/Arabic and other non-ASCII are rejected so that 3x-ui inbound remarks
 # (and downstream client emails) never contain RTL text or non-ASCII bytes.
 _ASCII_TITLE_RE = re.compile(r"^[A-Za-z0-9 ._-]+$")
+# IPv4-only for the seller's Iranian endpoint. Domains are rejected because
+# the buyer's vless link points directly at this address; a stable, public
+# IP avoids DNS-based leakage and makes the seller-side tunnel setup explicit.
+_IPV4_RE = re.compile(
+    r"^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}"
+    r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$"
+)
 
 
 class ListingOut(BaseModel):
@@ -50,7 +57,7 @@ class ListingOut(BaseModel):
 
 class ListingCreateIn(BaseModel):
     title: str = Field(min_length=2, max_length=128)
-    iran_host: str = Field(min_length=3, max_length=255)
+    iran_host: str = Field(min_length=7, max_length=15)
     port: int = Field(ge=1, le=65535)
     price_per_gb_usd: Decimal = Field(gt=0)
 
@@ -62,6 +69,14 @@ class ListingCreateIn(BaseModel):
             raise ValueError(
                 "title must be English letters, digits, space, dot, dash, or underscore"
             )
+        return v
+
+    @field_validator("iran_host")
+    @classmethod
+    def _ipv4_only(cls, v: str) -> str:
+        v = v.strip()
+        if not _IPV4_RE.fullmatch(v):
+            raise ValueError("iran_host must be a valid IPv4 address")
         return v
 
 

@@ -10,6 +10,12 @@
 #   /api/*      → Mini App backend (initData-authenticated)
 # Everything else is rejected; admin/prober endpoints stay on the docker net.
 
+{
+	# Setting an email enables BOTH Let's Encrypt and ZeroSSL as issuers.
+	# If LE hits a rate limit, Caddy automatically falls back to ZeroSSL.
+	email {$ACME_EMAIL}
+}
+
 {$DOMAIN} {
 	encode gzip
 

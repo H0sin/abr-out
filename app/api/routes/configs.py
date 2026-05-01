@@ -191,8 +191,13 @@ async def create_config(
             logger.exception("3x-ui addClient failed: {}", e)
             raise HTTPException(502, detail="panel error") from e
 
+        # Customer connects to the seller's Iranian endpoint (host:port that
+        # the seller entered when creating the listing). The seller is
+        # responsible for running a tunnel inbound on their Iran panel that
+        # forwards this port to our foreign outbound panel
+        # (settings.xui_panel_host_public). See Sell page for instructions.
         vless_link = (
-            f"vless://{client_uuid}@{settings.xui_panel_host_public}:{listing.port}"
+            f"vless://{client_uuid}@{listing.iran_host}:{listing.port}"
             f"?type=tcp&security=none&encryption=none#{email}"
         )
 
