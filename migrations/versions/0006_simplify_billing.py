@@ -23,24 +23,16 @@ depends_on = None
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    inspector = sa.inspect(bind)
-    existing = {c["name"] for c in inspector.get_columns("config_usage")}
-    if "seller_credit_usd" not in existing:
-        op.add_column(
-            "config_usage",
-            sa.Column(
-                "seller_credit_usd",
-                sa.Numeric(20, 8),
-                nullable=False,
-                server_default="0",
-            ),
-        )
+    op.add_column(
+        "config_usage",
+        sa.Column(
+            "seller_credit_usd",
+            sa.Numeric(20, 8),
+            nullable=False,
+            server_default="0",
+        ),
+    )
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    inspector = sa.inspect(bind)
-    existing = {c["name"] for c in inspector.get_columns("config_usage")}
-    if "seller_credit_usd" in existing:
-        op.drop_column("config_usage", "seller_credit_usd")
+    op.drop_column("config_usage", "seller_credit_usd")

@@ -383,12 +383,23 @@ class XuiClient:
 
         Endpoint: ``POST /panel/api/inbounds/resetAllClientTraffics/{inbound_id}``.
         Note: 3x-ui does not expose a per-inbound reset for the inbound's own
-        ``up``/``down`` totals — the poller tracks those via diff instead.
+        ``up``/``down`` totals — use :meth:`reset_all_inbounds_stat` once per
+        cycle to zero those globally.
         """
         await self._request(
             "POST",
             f"/panel/api/inbounds/resetAllClientTraffics/{inbound_id}",
         )
+
+    async def reset_all_inbounds_stat(self) -> None:
+        """Reset every inbound's own ``up``/``down`` totals to zero.
+
+        Endpoint: ``POST /panel/api/inbounds/resetAllTraffics``. Affects ALL
+        inbounds on the panel — safe here because the panel is dedicated to
+        abr-out. Per-client counters are not touched (handled separately by
+        :meth:`reset_inbound_clients_traffic`).
+        """
+        await self._request("POST", "/panel/api/inbounds/resetAllTraffics")
 
 
 def build_vless_link(

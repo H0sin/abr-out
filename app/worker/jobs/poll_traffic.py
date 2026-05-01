@@ -43,7 +43,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,6 +53,7 @@ from app.common.db.models import (
     ConfigUsage,
     Listing,
     ListingStatus,
+    OutboundUsage,
     TxnType,
     WalletTransaction,
 )
@@ -89,32 +90,89 @@ async def _bill_inbound(
     reset_attempted: bool,
     reset_succeeded: bool,
 ) -> bool:
-    """Insert per-config usage + paired wallet rows and update anchors.
+    """Insert per-cycle usage rows and signed wallet entries.
 
-    Billing is driven entirely by per-client (buyer config) deltas. For each
-    client with traffic we insert exactly two wallet rows in the same DB
-    transaction: a ``usage_debit`` on the buyer for
-    ``gb × price × (1 + commission_pct)`` and a ``usage_credit`` on the
-    seller for ``gb × price``. The surcharge difference is implicit
-    platform profit and is **not** booked anywhere — no ``commission`` row
-    is created. The inbound-level (``snap.up`` / ``snap.down``) totals are
-    no longer billed; the ``last_outbound_*_bytes`` anchors on the listing
-    are still advanced so they don't grow stale.
+    Two-tier billing:
+
+    * **Seller** is credited once per cycle from the inbound-level delta
+      (``snap.up + snap.down`` minus the listing's outbound anchors).
+      One :class:`OutboundUsage` row + one ``usage_credit``
+      ``WalletTransaction`` (``poll:{cycle_id}:outbound:{listing_id}``).
+    * **Buyer** is debited per-config from the per-client delta. One
+      :class:`ConfigUsage` row + one ``usage_debit`` ``WalletTransaction``
+      (``poll:{cycle_id}:debit:{cfg_id}``) per config that moved bytes.
+      Buyer pays ``gb × price × (1 + commission_pct)``; the surcharge
+      difference is implicit platform profit (not booked).
 
     Returns ``True`` if any usage row was inserted.
     """
-    # Advance the inbound-level anchors (informational only — not billed).
-    if snap.up >= listing.last_outbound_up_bytes:
-        listing.last_outbound_up_bytes = snap.up
-    else:
-        # Panel-side reset detected; resync to current.
-        listing.last_outbound_up_bytes = snap.up
-    if snap.down >= listing.last_outbound_down_bytes:
-        listing.last_outbound_down_bytes = snap.down
-    else:
-        listing.last_outbound_down_bytes = snap.down
+    # --- inbound-level (seller credit) ---
+    current_inbound_total = snap.up + snap.down
+    prev_inbound_total = (
+        listing.last_outbound_up_bytes + listing.last_outbound_down_bytes
+    )
+    outbound_delta = current_inbound_total - prev_inbound_total
+    if outbound_delta < 0:
+        logger.warning(
+            "[poll] listing={} panel-side inbound reset detected "
+            "(prev={}, now={}); treating delta=current",
+            listing.id,
+            prev_inbound_total,
+            current_inbound_total,
+        )
+        outbound_delta = current_inbound_total
 
-    # --- per-config (paired buyer debit + seller credit) ---
+    had_traffic = False
+    if outbound_delta > 0:
+        had_traffic = True
+        gb = _q_gb(Decimal(outbound_delta) / _BYTES_PER_GB)
+        seller_credit = _q_usd(gb * listing.price_per_gb_usd)
+        # Split the delta proportionally to the panel reading for audit.
+        if current_inbound_total > 0:
+            d_up = int(round(outbound_delta * (snap.up / current_inbound_total)))
+            d_down = outbound_delta - d_up
+        else:
+            d_up = 0
+            d_down = 0
+        session.add(
+            OutboundUsage(
+                listing_id=listing.id,
+                seller_user_id=listing.seller_user_id,
+                panel_inbound_id=listing.panel_inbound_id,
+                cycle_id=cycle_id,
+                delta_up_bytes=d_up,
+                delta_down_bytes=d_down,
+                delta_total_bytes=outbound_delta,
+                gb=gb,
+                seller_credit_usd=seller_credit,
+                panel_total_up_bytes=snap.up,
+                panel_total_down_bytes=snap.down,
+                reset_attempted=reset_attempted,
+                reset_succeeded=reset_succeeded,
+                sampled_at=sampled_at,
+            )
+        )
+        if seller_credit > 0:
+            session.add(
+                WalletTransaction(
+                    user_id=listing.seller_user_id,
+                    amount=seller_credit,
+                    type=TxnType.usage_credit,
+                    ref=f"listing:{listing.id}",
+                    note=(
+                        f"outbound {outbound_delta}B @ "
+                        f"{listing.price_per_gb_usd}/GB"
+                    ),
+                    idempotency_key=f"poll:{cycle_id}:outbound:{listing.id}",
+                )
+            )
+
+    # Advance the inbound anchors. If the global resetAllTraffics succeeds
+    # at the end of the cycle, poll_traffic_once() will bulk-zero these.
+    listing.last_outbound_up_bytes = snap.up
+    listing.last_outbound_down_bytes = snap.down
+
+    # --- per-config (buyer debit only) ---
     cfg_rows = (
         await session.execute(
             select(Config).where(
@@ -125,7 +183,6 @@ async def _bill_inbound(
     ).scalars().all()
     by_email: dict[str, Config] = {c.panel_client_email: c for c in cfg_rows}
 
-    had_traffic = False
     for ct in snap.clients:
         cfg = by_email.get(ct.email)
         if cfg is None:
@@ -149,8 +206,7 @@ async def _bill_inbound(
         if delta > 0:
             had_traffic = True
             gb = _q_gb(Decimal(delta) / _BYTES_PER_GB)
-            seller_credit_abs = _q_usd(gb * listing.price_per_gb_usd)
-            buyer_debit_abs = _q_usd(
+            buyer_debit = _q_usd(
                 gb * listing.price_per_gb_usd * (Decimal("1") + commission_pct)
             )
             # Split the delta proportionally to the panel reading for audit.
@@ -171,45 +227,34 @@ async def _bill_inbound(
                     delta_down_bytes=d_down,
                     delta_total_bytes=delta,
                     gb=gb,
-                    buyer_debit_usd=buyer_debit_abs,
-                    seller_credit_usd=seller_credit_abs,
+                    buyer_debit_usd=buyer_debit,
+                    seller_credit_usd=ZERO,
                     panel_email=ct.email,
                     reset_attempted=reset_attempted,
                     reset_succeeded=reset_succeeded,
                     sampled_at=sampled_at,
                 )
             )
-            note = (
-                f"usage {delta}B @ {listing.price_per_gb_usd}/GB "
-                f"+{commission_pct}"
-            )
-            if buyer_debit_abs > 0:
+            if buyer_debit > 0:
                 session.add(
                     WalletTransaction(
                         user_id=cfg.buyer_user_id,
-                        amount=-buyer_debit_abs,
+                        amount=-buyer_debit,
                         type=TxnType.usage_debit,
                         ref=f"config:{cfg.id}",
-                        note=note,
+                        note=(
+                            f"usage {delta}B @ {listing.price_per_gb_usd}"
+                            f"/GB +{commission_pct}"
+                        ),
                         idempotency_key=f"poll:{cycle_id}:debit:{cfg.id}",
-                    )
-                )
-            if seller_credit_abs > 0:
-                session.add(
-                    WalletTransaction(
-                        user_id=listing.seller_user_id,
-                        amount=seller_credit_abs,
-                        type=TxnType.usage_credit,
-                        ref=f"config:{cfg.id}",
-                        note=note,
-                        idempotency_key=f"poll:{cycle_id}:credit:{cfg.id}",
                     )
                 )
 
         # Update anchor regardless of whether delta > 0:
-        # - reset succeeded => panel at 0, anchor = 0
-        # - reset failed/skipped => anchor = current panel total so next cycle
-        #   bills via diff (next_total - current_total) and avoids double-count
+        # - client reset succeeded => panel at 0, anchor = 0
+        # - client reset failed/skipped => anchor = current panel total so
+        #   next cycle bills via diff (next_total - current_total) and
+        #   avoids double-count.
         cfg.last_snapshot_bytes = 0 if reset_succeeded else current_total
 
     return had_traffic
@@ -361,6 +406,7 @@ async def poll_traffic_once() -> None:
     )
 
     summary: dict[str, int] = defaultdict(int)
+    processed_ids: list[int] = []
     async with XuiClient() as xui:
         for lid in listing_ids:
             res = await _process_listing(
@@ -374,6 +420,7 @@ async def poll_traffic_once() -> None:
             summary["total"] += 1
             if res["ok"]:
                 summary["ok"] += 1
+                processed_ids.append(lid)
             else:
                 summary["failed"] += 1
             if res["had_traffic"]:
@@ -381,12 +428,47 @@ async def poll_traffic_once() -> None:
             if res["reset_attempted"] and not res["reset_succeeded"]:
                 summary["reset_failed"] += 1
 
+        # --- end-of-cycle: reset all inbound up/down totals on the panel ---
+        # 3x-ui has no per-inbound endpoint for this; resetAllTraffics zeros
+        # every inbound's totals in one shot. Safe because the panel is
+        # dedicated to abr-out. Per-client counters were already reset
+        # individually in step 2 of each listing's sub-cycle.
+        outbound_reset_ok = False
+        if settings.traffic_reset_enabled and processed_ids:
+            try:
+                await xui.reset_all_inbounds_stat()
+                outbound_reset_ok = True
+            except Exception as e:  # noqa: BLE001
+                logger.exception(
+                    "[poll] cycle={} resetAllTraffics failed: {!r}",
+                    cycle_id,
+                    e,
+                )
+
+    # If the global reset succeeded, zero the listings' outbound anchors so
+    # the next cycle reads fresh totals (symmetric with the per-client flow).
+    # On failure the anchors stay at the just-observed values (set inside
+    # _bill_inbound) so the next cycle still diffs correctly.
+    if outbound_reset_ok:
+        async with SessionLocal() as session:
+            await session.execute(
+                update(Listing)
+                .where(Listing.id.in_(processed_ids))
+                .values(
+                    last_outbound_up_bytes=0,
+                    last_outbound_down_bytes=0,
+                )
+            )
+            await session.commit()
+
     logger.info(
-        "[poll] cycle={} done: total={} ok={} billed={} failed={} reset_failed={}",
+        "[poll] cycle={} done: total={} ok={} billed={} failed={} "
+        "reset_failed={} outbound_reset_ok={}",
         cycle_id,
         summary["total"],
         summary["ok"],
         summary["billed"],
         summary["failed"],
         summary["reset_failed"],
+        outbound_reset_ok,
     )
