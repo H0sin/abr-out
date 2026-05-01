@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
@@ -366,7 +366,7 @@ async def patch_config(
     return _to_out(config, listing)
 
 
-@router.delete("/{config_id}", status_code=204, response_class=Response)
+@router.delete("/{config_id}", status_code=204)
 async def delete_config(
     config_id: int,
     user: User = Depends(current_user),
