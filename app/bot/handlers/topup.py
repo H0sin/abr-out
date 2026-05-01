@@ -5,9 +5,9 @@ from decimal import Decimal, InvalidOperation
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from app.bot.keyboards import BTN_TOPUP, main_menu
+from app.bot.keyboards import CB_TOPUP, main_menu_inline
 from app.common.db.models import SwapWalletTx, SwapWalletTxStatus
 from app.common.db.session import SessionLocal
 from app.common.logging import logger
@@ -21,17 +21,18 @@ class TopUpStates(StatesGroup):
     waiting_amount = State()
 
 
-@router.message(F.text == BTN_TOPUP)
-async def on_topup_start(message: Message, state: FSMContext) -> None:
-    if message.from_user is None:
+@router.callback_query(F.data == CB_TOPUP)
+async def on_topup_start(cb: CallbackQuery, state: FSMContext) -> None:
+    if cb.from_user is None or cb.message is None:
         return
     settings = get_settings()
     await state.set_state(TopUpStates.waiting_amount)
-    await message.answer(
+    await cb.message.answer(
         f"💵 مبلغ دلاری که می‌خواهید به کیف پول اضافه شود را وارد کنید:\n"
         f"(حداقل: <b>{settings.min_topup_usd}$</b>)\n\n"
         f"مثال: <code>5</code> یا <code>10.50</code>",
     )
+    await cb.answer()
 
 
 @router.message(TopUpStates.waiting_amount)
@@ -47,14 +48,14 @@ async def on_topup_amount(message: Message, state: FSMContext) -> None:
     except InvalidOperation:
         await message.answer(
             "❌ مبلغ نامعتبر است. لطفاً یک عدد وارد کنید.",
-            reply_markup=main_menu(),
+            reply_markup=main_menu_inline(),
         )
         return
 
     if amount_usd < settings.min_topup_usd:
         await message.answer(
             f"❌ حداقل مبلغ {settings.min_topup_usd}$ است.",
-            reply_markup=main_menu(),
+            reply_markup=main_menu_inline(),
         )
         return
 
@@ -67,7 +68,7 @@ async def on_topup_amount(message: Message, state: FSMContext) -> None:
         await processing_msg.edit_text(
             "❌ خطا در ساخت لینک پرداخت. لطفاً دوباره امتحان کنید.",
         )
-        await message.answer("بازگشت به منو:", reply_markup=main_menu())
+        await message.answer("بازگشت به منو:", reply_markup=main_menu_inline())
         return
 
     async with SessionLocal() as session:

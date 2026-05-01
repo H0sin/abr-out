@@ -7,15 +7,15 @@ from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.bot.keyboards import (
-    BTN_SUPPORT,
-    BTN_WALLET,
+    CB_SUPPORT,
+    CB_WALLET,
     admin_user_panel,
-    main_menu,
-    open_app_inline,
+    hide_reply_keyboard,
+    main_menu_inline,
     support_reply_kb,
 )
 from app.common.db.models import SupportDirection, SupportMessage, User
@@ -43,6 +43,15 @@ async def _block_guard(message: Message) -> bool:
         return False
     if await _is_blocked(message.from_user.id):
         await message.answer("🚫 حساب شما مسدود است.")
+        return True
+    return False
+
+
+async def _block_guard_cb(cb: CallbackQuery) -> bool:
+    if cb.from_user is None:
+        return False
+    if await _is_blocked(cb.from_user.id):
+        await cb.answer("🚫 حساب شما مسدود است.", show_alert=True)
         return True
     return False
 
@@ -77,18 +86,15 @@ async def cmd_start(message: Message) -> None:
         await message.answer("🚫 حساب شما مسدود است.")
         return
 
+    # Clear any legacy persistent reply keyboard from older bot versions.
     await message.answer(
-        "سلام! به مارکت‌پلیس اوت\u200cباند خوش اومدی.\n\n"
-        "از منوی پایین یکی از گزینه‌ها رو انتخاب کن:",
-        reply_markup=main_menu(),
+        "سلام! به مارکت‌پلیس اوت\u200cباند خوش اومدی.",
+        reply_markup=hide_reply_keyboard(),
     )
-
-    inline = open_app_inline()
-    if inline is not None:
-        await message.answer(
-            "برای ورود به مینی‌اپ روی دکمهٔ زیر بزن:",
-            reply_markup=inline,
-        )
+    await message.answer(
+        "از منوی زیر یکی را انتخاب کن:",
+        reply_markup=main_menu_inline(),
+    )
 
     if is_first_start:
         await _notify_admins_new_user(user)
@@ -119,40 +125,42 @@ async def _notify_admins_new_user(user: User | None) -> None:
             )
 
 
-@router.message(F.text == BTN_WALLET)
-async def on_wallet(message: Message) -> None:
-    if message.from_user is None:
+@router.callback_query(F.data == CB_WALLET)
+async def on_wallet(cb: CallbackQuery) -> None:
+    if cb.from_user is None or cb.message is None:
         return
-    if await _block_guard(message):
+    if await _block_guard_cb(cb):
         return
     from app.common.db.wallet import get_balance
 
     async with SessionLocal() as session:
-        balance = await get_balance(session, message.from_user.id)
+        balance = await get_balance(session, cb.from_user.id)
 
-    await message.answer(
+    await cb.message.answer(
         f"💵 موجودی کیف پول: <b>{balance:.4f} USD</b>",
-        reply_markup=main_menu(),
+        reply_markup=main_menu_inline(),
     )
+    await cb.answer()
 
 
-@router.message(F.text == BTN_SUPPORT)
-async def on_support_start(message: Message, state: FSMContext) -> None:
-    if message.from_user is None:
+@router.callback_query(F.data == CB_SUPPORT)
+async def on_support_start(cb: CallbackQuery, state: FSMContext) -> None:
+    if cb.message is None:
         return
-    if await _block_guard(message):
+    if await _block_guard_cb(cb):
         return
     await state.set_state(SupportStates.waiting_message)
-    await message.answer(
+    await cb.message.answer(
         "📨 پیام خود را برای پشتیبانی ارسال کنید (متن).\n"
         "برای انصراف /cancel را بزنید.",
     )
+    await cb.answer()
 
 
 @router.message(SupportStates.waiting_message, F.text == "/cancel")
 async def on_support_cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer("❎ ارسال پیام پشتیبانی لغو شد.", reply_markup=main_menu())
+    await message.answer("❎ ارسال پیام پشتیبانی لغو شد.", reply_markup=main_menu_inline())
 
 
 @router.message(SupportStates.waiting_message)
@@ -166,7 +174,7 @@ async def on_support_message(message: Message, state: FSMContext) -> None:
     settings = get_settings()
     text = message.text.strip()
     if not text:
-        await message.answer("متن پیام خالی بود.", reply_markup=main_menu())
+        await message.answer("متن پیام خالی بود.", reply_markup=main_menu_inline())
         return
 
     async with SessionLocal() as session:
@@ -208,5 +216,5 @@ async def on_support_message(message: Message, state: FSMContext) -> None:
 
     await message.answer(
         "✅ پیام شما برای پشتیبانی ارسال شد. به‌زودی پاسخ می‌گیرید.",
-        reply_markup=main_menu(),
+        reply_markup=main_menu_inline(),
     )

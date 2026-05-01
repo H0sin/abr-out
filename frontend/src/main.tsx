@@ -51,16 +51,19 @@ if (
 }
 
 // Apply the Telegram theme to <meta theme-color> + html background and
-// re-apply whenever the user flips light/dark in Telegram settings.
+// re-apply whenever the user flips light/dark in Telegram settings. A user
+// override stored in localStorage (set via the ThemeToggle) wins over both
+// Telegram and OS preferences.
 function applyTheme() {
   const t = window.Telegram?.WebApp;
-  // Prefer Telegram's reported color scheme; fall back to OS-level dark
-  // preference when Telegram does not expose one (older clients / non-TG).
+  const stored = localStorage.getItem("abr-out:theme");
   const scheme =
-    t?.colorScheme ??
-    (window.matchMedia?.("(prefers-color-scheme: dark)").matches
-      ? "dark"
-      : "light");
+    stored === "dark" || stored === "light"
+      ? stored
+      : t?.colorScheme ??
+        (window.matchMedia?.("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light");
   document.documentElement.dataset.scheme = scheme;
   if (!t) return;
   const bg =
