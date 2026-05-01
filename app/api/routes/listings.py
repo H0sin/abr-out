@@ -9,6 +9,8 @@ from sqlalchemy import select
 from app.api.deps import current_user
 from app.common.db.models import Listing, ListingStatus, User
 from app.common.db.session import SessionLocal
+from app.common.logging import logger
+from app.common.panel.xui_client import XuiClient, XuiError
 
 router = APIRouter(prefix="/api/listings", tags=["listings"])
 
@@ -95,14 +97,57 @@ async def create_listing(
     user: User = Depends(current_user),
 ) -> ListingOut:
     """Seller creates a new listing. It is published immediately as 'active'."""
+    logger.info(
+        "[listings.create] seller_user_id={} title={!r} iran_host={} port={} price_per_gb_usd={}",
+        user.telegram_id,
+        body.title,
+        body.iran_host,
+        body.port,
+        body.price_per_gb_usd,
+    )
     async with SessionLocal() as session:
         # uniqueness on port is enforced by the DB; surface a friendly error
         existing = await session.execute(
             select(Listing).where(Listing.port == body.port)
         )
         if existing.scalar_one_or_none() is not None:
+            logger.warning(
+                "[listings.create] port {} already used; rejecting", body.port
+            )
             raise HTTPException(409, detail="port already used by another listing")
 
+    # Provision a VLESS-TCP inbound on the foreign 3x-ui panel BEFORE
+    # persisting, so the listing is only saved when the panel-side resource
+    # exists and we have its id.
+    panel_inbound_id: int | None = None
+    try:
+        async with XuiClient() as xui:
+            inbound = await xui.add_vless_tcp_inbound(
+                port=body.port, remark=body.title
+            )
+        raw_id = inbound.get("id")
+        if raw_id is None:
+            logger.error(
+                "[listings.create] 3x-ui add inbound returned no id; obj={}",
+                inbound,
+            )
+            raise HTTPException(502, detail="panel error: missing inbound id")
+        panel_inbound_id = int(raw_id)
+        logger.info(
+            "[listings.create] 3x-ui inbound provisioned id={} port={}",
+            panel_inbound_id,
+            body.port,
+        )
+    except XuiError as e:
+        logger.exception("[listings.create] 3x-ui add inbound failed: {}", e)
+        raise HTTPException(502, detail="panel error") from e
+    except HTTPException:
+        raise
+    except Exception as e:  # transport / unexpected
+        logger.exception("[listings.create] 3x-ui add inbound unexpected error: {}", e)
+        raise HTTPException(502, detail="panel error") from e
+
+    async with SessionLocal() as session:
         listing = Listing(
             seller_user_id=user.telegram_id,
             title=body.title,
@@ -110,10 +155,35 @@ async def create_listing(
             port=body.port,
             price_per_gb_usd=body.price_per_gb_usd,
             status=ListingStatus.active,
+            panel_inbound_id=panel_inbound_id,
         )
         session.add(listing)
-        await session.commit()
-        await session.refresh(listing)
+        try:
+            await session.commit()
+            await session.refresh(listing)
+        except Exception as e:
+            await session.rollback()
+            logger.exception(
+                "[listings.create] DB commit failed; rolling back panel inbound {}: {}",
+                panel_inbound_id,
+                e,
+            )
+            try:
+                async with XuiClient() as xui:
+                    await xui.delete_inbound(panel_inbound_id)
+            except Exception as cleanup_err:
+                logger.exception(
+                    "[listings.create] failed to cleanup panel inbound {}: {}",
+                    panel_inbound_id,
+                    cleanup_err,
+                )
+            raise HTTPException(500, detail="failed to save listing") from e
+
+    logger.info(
+        "[listings.create] listing_id={} provisioned with panel_inbound_id={}",
+        listing.id,
+        listing.panel_inbound_id,
+    )
 
     return ListingOut(
         id=listing.id,

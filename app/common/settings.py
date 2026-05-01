@@ -46,12 +46,6 @@ class Settings(BaseSettings):
     nowpayments_api_key: str = ""
     nowpayments_ipn_secret: str = ""
 
-    # SwapWallet
-    swapwallet_api_key: str = ""
-    # Optional fallback if SwapWallet rate API is unreachable (Toman per 1 USDT).
-    # 0 means no fallback → raise an error.
-    swapwallet_fallback_rate: int = 0
-
     # Public URL settings.
     # Set DOMAIN to your Cloudflare-fronted domain (e.g. example.com).
     # webhook_base_url is auto-derived as https://{domain} unless overridden.

@@ -101,7 +101,7 @@ export function Wallet() {
             <div className="title">افزایش موجودی</div>
             <p className="muted mt-2">
               برای شارژ کیف پول، به ربات بازگردید و گزینه «💰 افزایش موجودی» را
-              انتخاب کنید. پرداخت از طریق SwapWallet (USDT/IRT) انجام می‌شود.
+              انتخاب کنید. پرداخت با ارز دیجیتال از طریق NowPayments انجام می‌شود.
             </p>
             <button className="btn btn-primary mt-3" onClick={close}>
               بازگشت به ربات

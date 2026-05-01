@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
@@ -8,10 +8,14 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.bot.keyboards import CB_TOPUP, main_menu_inline
-from app.common.db.models import SwapWalletTx, SwapWalletTxStatus
+from app.common.db.models import PaymentGateway, PaymentIntent, PaymentStatus
 from app.common.db.session import SessionLocal
 from app.common.logging import logger
-from app.common.payment.swapwallet import create_swapwallet_payment
+from app.common.payment.nowpayments import (
+    create_invoice,
+    gen_order_id,
+    get_min_amount_usd,
+)
 from app.common.settings import get_settings
 
 router = Router(name="topup")
@@ -21,15 +25,24 @@ class TopUpStates(StatesGroup):
     waiting_amount = State()
 
 
+async def _effective_min_usd() -> Decimal:
+    settings = get_settings()
+    np_min = await get_min_amount_usd()
+    if np_min is None:
+        return settings.min_topup_usd
+    return max(settings.min_topup_usd, np_min)
+
+
 @router.callback_query(F.data == CB_TOPUP)
 async def on_topup_start(cb: CallbackQuery, state: FSMContext) -> None:
     if cb.from_user is None or cb.message is None:
         return
-    settings = get_settings()
+    min_usd = await _effective_min_usd()
     await state.set_state(TopUpStates.waiting_amount)
     await cb.message.answer(
         f"💵 مبلغ دلاری که می‌خواهید به کیف پول اضافه شود را وارد کنید:\n"
-        f"(حداقل: <b>{settings.min_topup_usd}$</b>)\n\n"
+        f"(حداقل: <b>{min_usd}$</b>)\n\n"
+        f"💎 پرداخت با ارز دیجیتال از طریق NowPayments انجام می‌شود.\n\n"
         f"مثال: <code>5</code> یا <code>10.50</code>",
     )
     await cb.answer()
@@ -41,8 +54,6 @@ async def on_topup_amount(message: Message, state: FSMContext) -> None:
     if message.from_user is None or message.text is None:
         return
 
-    settings = get_settings()
-
     try:
         amount_usd = Decimal(message.text.strip().replace(",", "."))
     except InvalidOperation:
@@ -52,19 +63,23 @@ async def on_topup_amount(message: Message, state: FSMContext) -> None:
         )
         return
 
-    if amount_usd < settings.min_topup_usd:
+    min_usd = await _effective_min_usd()
+    if amount_usd < min_usd:
         await message.answer(
-            f"❌ حداقل مبلغ {settings.min_topup_usd}$ است.",
+            f"❌ حداقل مبلغ {min_usd}$ است.",
             reply_markup=main_menu_inline(),
         )
         return
 
     processing_msg = await message.answer("⏳ در حال ساخت لینک پرداخت...")
 
+    order_id = gen_order_id()
     try:
-        payment = await create_swapwallet_payment(amount_usd, message.from_user.id)
+        payment = await create_invoice(amount_usd, order_id, message.from_user.id)
     except Exception:
-        logger.exception("SwapWallet payment creation failed for user {}", message.from_user.id)
+        logger.exception(
+            "NowPayments invoice creation failed for user {}", message.from_user.id
+        )
         await processing_msg.edit_text(
             "❌ خطا در ساخت لینک پرداخت. لطفاً دوباره امتحان کنید.",
         )
@@ -72,15 +87,15 @@ async def on_topup_amount(message: Message, state: FSMContext) -> None:
         return
 
     async with SessionLocal() as session:
-        tx = SwapWalletTx(
-            order_id=payment["order_id"],
+        intent = PaymentIntent(
             user_id=message.from_user.id,
-            amount_usd=payment["amount_usd"],
-            amount_irt=payment["amount_irt"],
-            invoice_id=payment["invoice_id"],
-            status=SwapWalletTxStatus.pending,
+            gateway=PaymentGateway.nowpayments,
+            amount=payment["amount_usd"],
+            currency="USD",
+            status=PaymentStatus.pending,
+            external_ref=payment["order_id"],
         )
-        session.add(tx)
+        session.add(intent)
         await session.commit()
 
     kbd = InlineKeyboardMarkup(
@@ -88,12 +103,11 @@ async def on_topup_amount(message: Message, state: FSMContext) -> None:
             [InlineKeyboardButton(text=f"💳 پرداخت {amount_usd}$", url=payment["pay_url"])]
         ]
     )
-    amount_irt_fmt = f"{payment['amount_irt']:,}"
     await processing_msg.edit_text(
         f"✅ لینک پرداخت آماده شد.\n\n"
         f"💵 مبلغ: <b>{amount_usd}$</b>\n"
-        f"🪙 معادل تومانی: <b>{amount_irt_fmt} تومان</b>\n"
         f"🔢 کد پیگیری: <code>{payment['order_id']}</code>\n\n"
-        f"برای پرداخت روی دکمه زیر کلیک کنید:",
+        f"💎 روی دکمه زیر کلیک کنید و در صفحه‌ی NowPayments ارز دیجیتال موردنظر "
+        f"خود (USDT, BTC, …) را انتخاب کنید:",
         reply_markup=kbd,
     )

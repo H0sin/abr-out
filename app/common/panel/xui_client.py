@@ -71,24 +71,66 @@ class XuiClient:
     # --- auth ---
 
     async def login(self) -> None:
-        resp = await self._client.post(
-            "/login",
-            data={"username": self._username, "password": self._password},
+        logger.info(
+            "[xui] login -> base_url={} username={}",
+            self._base_url,
+            self._username,
+        )
+        try:
+            resp = await self._client.post(
+                "/login",
+                data={"username": self._username, "password": self._password},
+            )
+        except httpx.HTTPError as e:
+            logger.error(
+                "[xui] login transport error base_url={} err={!r}",
+                self._base_url,
+                e,
+            )
+            raise
+        logger.info(
+            "[xui] login response status={} body={}",
+            resp.status_code,
+            (resp.text or "")[:500],
         )
         resp.raise_for_status()
         body = resp.json()
         if not body.get("success"):
             raise XuiError(f"3x-ui login failed: {body}")
         self._logged_in = True
-        logger.debug("3x-ui login ok")
+        logger.debug("[xui] login ok")
 
     async def _request(self, method: str, path: str, **kw: Any) -> dict[str, Any]:
         if not self._logged_in:
             await self.login()
-        resp = await self._client.request(method, path, **kw)
+        json_body = kw.get("json")
+        logger.info(
+            "[xui] -> {} {} json={}",
+            method,
+            path,
+            json.dumps(json_body, ensure_ascii=False)[:1000] if json_body is not None else None,
+        )
+        try:
+            resp = await self._client.request(method, path, **kw)
+        except httpx.HTTPError as e:
+            logger.error("[xui] {} {} transport error: {!r}", method, path, e)
+            raise
         if resp.status_code in (401, 403):
+            logger.warning(
+                "[xui] {} {} -> {} (re-login & retry)",
+                method,
+                path,
+                resp.status_code,
+            )
             await self.login()
             resp = await self._client.request(method, path, **kw)
+        logger.info(
+            "[xui] <- {} {} status={} body={}",
+            method,
+            path,
+            resp.status_code,
+            (resp.text or "")[:1000],
+        )
         resp.raise_for_status()
         body = resp.json()
         if not body.get("success", False):
@@ -105,6 +147,9 @@ class XuiClient:
         self, port: int, remark: str
     ) -> dict[str, Any]:
         """Create a VLESS TCP plain inbound. Returns the created inbound dict."""
+        logger.info(
+            "[xui] add_vless_tcp_inbound port={} remark={!r}", port, remark
+        )
         settings_obj = {
             "clients": [],
             "decryption": "none",
