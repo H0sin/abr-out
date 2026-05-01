@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from html import escape
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.bot.keyboards import (
+    CB_MSHIP_CHECK,
     CB_SUPPORT,
     CB_WALLET,
     CB_WALLET_HUB,
@@ -143,6 +144,39 @@ async def _notify_admins_new_user(user: User | None) -> None:
             logger.exception(
                 "Failed to notify admin {} about new user {}", admin_id, user.telegram_id
             )
+
+
+_MEMBER_OK = {"member", "administrator", "creator"}
+
+
+@router.callback_query(F.data == CB_MSHIP_CHECK)
+async def on_membership_check(cb: CallbackQuery, bot: Bot, state: FSMContext) -> None:
+    if cb.from_user is None or cb.message is None:
+        return
+    settings = get_settings()
+    channel = settings.required_channel.strip()
+    if not channel:
+        await cb.answer()
+        return
+    is_member = False
+    try:
+        cm = await bot.get_chat_member(channel, cb.from_user.id)
+        is_member = getattr(cm, "status", None) in _MEMBER_OK
+    except Exception:
+        logger.exception(
+            "Membership re-check failed for user {} on channel {}",
+            cb.from_user.id,
+            channel,
+        )
+    if not is_member:
+        await cb.answer("هنوز عضو کانال نیستید.", show_alert=True)
+        return
+    await state.clear()
+    await cb.message.answer(
+        "✅ عضویت شما تایید شد.\nاز منوی زیر یکی را انتخاب کن:",
+        reply_markup=main_menu_inline(),
+    )
+    await cb.answer("عضویت تایید شد.")
 
 
 @router.callback_query(F.data == CB_WALLET_HUB)

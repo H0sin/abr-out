@@ -14,6 +14,13 @@ class Settings(BaseSettings):
     bot_token: str = Field(default="")
     bot_username: str = Field(default="")  # without leading @, e.g. "abrout_bot"
     admin_telegram_ids: str = Field(default="")  # comma-separated
+    # Forced channel subscription gate. Either an @username or a numeric
+    # -100… chat id. Empty disables the gate. The bot must be an admin of
+    # the channel for getChatMember to work.
+    required_channel: str = Field(default="")
+    # Optional explicit join URL. If empty and required_channel starts with
+    # "@", a t.me link is derived automatically.
+    required_channel_url: str = Field(default="")
 
     # Database
     postgres_user: str = "abrout"
@@ -133,6 +140,16 @@ class Settings(BaseSettings):
             for x in self.admin_telegram_ids.split(",")
             if x.strip().isdigit()
         }
+
+    @property
+    def effective_required_channel_url(self) -> str:
+        """Best-effort join URL for the required channel."""
+        if self.required_channel_url:
+            return self.required_channel_url.strip()
+        ch = self.required_channel.strip()
+        if ch.startswith("@") and len(ch) > 1:
+            return f"https://t.me/{ch[1:]}"
+        return ""
 
 
 @lru_cache

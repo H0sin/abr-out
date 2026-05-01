@@ -26,6 +26,20 @@ CB_WALLET = "menu:wallet"
 CB_TOPUP = "menu:topup"
 CB_SUPPORT = "menu:support"
 CB_WALLET_HUB = "menu:wallet_hub"
+CB_MSHIP_CHECK = "mship:check"
+
+
+def join_channel_kb(channel_url: str) -> InlineKeyboardMarkup:
+    """Gate keyboard: a Join URL button + a re-check callback button."""
+    rows: list[list[InlineKeyboardButton]] = []
+    if channel_url:
+        rows.append(
+            [InlineKeyboardButton(text="🔔 عضویت در کانال", url=channel_url)]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="✅ بررسی عضویت", callback_data=CB_MSHIP_CHECK)]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _miniapp_url(route: str = "") -> str | None:
