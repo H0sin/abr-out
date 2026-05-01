@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -75,8 +76,9 @@ class ListingOut(BaseModel):
     # Marketplace stats shown on the buy card.
     total_gb_sold: float = 0.0
     gb_sold_24h: float = 0.0
-    # Stability percentage (0-100). Reserved for a future feature that
-    # derives stability from ping samples; ``None`` means "not yet computed".
+    # Stability percentage (0-100), computed by ``aggregate_pings_once`` as
+    # ok_count*100/total over the last 24h of PingSample rows. ``None`` when
+    # there are no samples yet (typical for freshly-promoted listings).
     stability_pct: int | None = None
 
 
@@ -145,7 +147,7 @@ async def list_active(
             status=l.status.value,
             total_gb_sold=float(l.total_gb_sold or 0),
             gb_sold_24h=gb_24h_by_listing.get(l.id, 0.0),
-            stability_pct=None,
+            stability_pct=l.stability_pct,
         )
         for (l, _u) in rows
     ]
@@ -181,7 +183,7 @@ async def list_my(
             status=l.status.value,
             total_gb_sold=float(l.total_gb_sold or 0),
             gb_sold_24h=0.0,
-            stability_pct=None,
+            stability_pct=l.stability_pct,
         )
         for l in listings
     ]
@@ -235,8 +237,12 @@ async def create_listing(
 
     # Provision a VLESS-TCP inbound on the foreign 3x-ui panel BEFORE
     # persisting, so the listing is only saved when the panel-side resource
-    # exists and we have its id.
+    # exists and we have its id. We also add a dedicated "probe" client to
+    # the inbound so the Iran-side prober can build a real VLESS-TCP tunnel
+    # through it and measure end-to-end L7 latency (mirrors 3x-ui's own
+    # outbound-test feature).
     panel_inbound_id: int | None = None
+    probe_uuid = uuid.uuid4()
     try:
         async with XuiClient() as xui:
             inbound = await xui.add_vless_tcp_inbound(
@@ -245,18 +251,47 @@ async def create_listing(
                 external_host=body.iran_host,
                 external_port=body.port,
             )
-        raw_id = inbound.get("id")
-        if raw_id is None:
-            logger.error(
-                "[listings.create] 3x-ui add inbound returned no id; obj={}",
-                inbound,
-            )
-            raise HTTPException(502, detail="panel error: missing inbound id")
-        panel_inbound_id = int(raw_id)
+            raw_id = inbound.get("id")
+            if raw_id is None:
+                logger.error(
+                    "[listings.create] 3x-ui add inbound returned no id; obj={}",
+                    inbound,
+                )
+                raise HTTPException(502, detail="panel error: missing inbound id")
+            panel_inbound_id = int(raw_id)
+            probe_email = f"probe-{panel_inbound_id}"
+            try:
+                await xui.add_client(
+                    inbound_id=panel_inbound_id,
+                    client_uuid=probe_uuid,
+                    email=probe_email,
+                    total_gb=0,
+                    expiry_ms=0,
+                    enable=True,
+                )
+            except Exception as e:
+                # Roll back the inbound we just created — leaving an inbound
+                # without a probe client would silently disable the quality
+                # gate for that listing.
+                logger.exception(
+                    "[listings.create] add probe client failed; rolling back inbound {}: {}",
+                    panel_inbound_id,
+                    e,
+                )
+                try:
+                    await xui.delete_inbound(panel_inbound_id)
+                except Exception as cleanup_err:  # noqa: BLE001
+                    logger.exception(
+                        "[listings.create] cleanup inbound {} failed: {}",
+                        panel_inbound_id,
+                        cleanup_err,
+                    )
+                raise HTTPException(502, detail="panel error: add probe client") from e
         logger.info(
-            "[listings.create] 3x-ui inbound provisioned id={} port={}",
+            "[listings.create] 3x-ui inbound provisioned id={} port={} probe_email={}",
             panel_inbound_id,
             body.port,
+            probe_email,
         )
     except XuiError as e:
         logger.exception("[listings.create] 3x-ui add inbound failed: {}", e)
@@ -268,14 +303,24 @@ async def create_listing(
         raise HTTPException(502, detail="panel error") from e
 
     async with SessionLocal() as session:
+        settings = get_settings()
+        pending_until = datetime.now(timezone.utc) + timedelta(
+            minutes=settings.listing_quality_gate_minutes
+        )
         listing = Listing(
             seller_user_id=user.telegram_id,
             title=body.title,
             iran_host=body.iran_host,
             port=body.port,
             price_per_gb_usd=body.price_per_gb_usd,
-            status=ListingStatus.active,
+            # Listings start in pending. The quality-gate worker promotes
+            # to active on the first ok=true ping sample, or hard-deletes
+            # the row (and panel inbound) once pending_until_at passes.
+            status=ListingStatus.pending,
             panel_inbound_id=panel_inbound_id,
+            probe_client_uuid=str(probe_uuid),
+            probe_client_email=probe_email,
+            pending_until_at=pending_until,
         )
         session.add(listing)
         try:
@@ -319,7 +364,7 @@ async def create_listing(
         status=listing.status.value,
         total_gb_sold=float(listing.total_gb_sold or 0),
         gb_sold_24h=0.0,
-        stability_pct=None,
+        stability_pct=listing.stability_pct,
     )
 
 
@@ -373,7 +418,7 @@ def _listing_to_out(l: Listing, seller_username: str | None) -> ListingOut:
         status=l.status.value,
         total_gb_sold=float(l.total_gb_sold or 0),
         gb_sold_24h=0.0,
-        stability_pct=None,
+        stability_pct=l.stability_pct,
     )
 
 

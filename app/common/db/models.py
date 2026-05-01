@@ -178,6 +178,20 @@ class Listing(Base):
         Numeric(20, 8), default=Decimal("0"), nullable=False
     )
     avg_ping_ms: Mapped[int | None] = mapped_column(Integer)
+    # Stability % over the last 24h, computed by ``aggregate_pings_once`` from
+    # ``PingSample`` (ok_count * 100 / total). ``None`` when no samples yet.
+    stability_pct: Mapped[int | None] = mapped_column(Integer)
+    # Probe client (added to the 3x-ui inbound at listing-creation time) used
+    # by the Iran-side ``iran-prober`` script to build a real VLESS-TCP tunnel
+    # and measure end-to-end L7 latency through it.
+    probe_client_uuid: Mapped[str | None] = mapped_column(String(64))
+    probe_client_email: Mapped[str | None] = mapped_column(String(128))
+    # Quality-gate deadline. Listings start in ``pending`` and are promoted to
+    # ``active`` on the first successful ping; if no ok=true sample arrives by
+    # this timestamp the listing is hard-deleted by ``listing_quality_gate``.
+    pending_until_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     sales_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # Last-seen panel-level cumulative up/down for this inbound.
     # Used by the traffic poller for diff-based outbound billing

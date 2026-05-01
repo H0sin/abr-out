@@ -348,38 +348,66 @@ class BscPayoutClient:
         scale = Decimal(10**decimals)
 
         # Public BSC RPCs cap eth_getLogs to a few thousand blocks per call
-        # (typically 5k). Walk backward in chunks until we have enough events
-        # or hit the requested lookback budget.
-        CHUNK = 4_000
+        # (typically 5k) AND throttle by request rate (-32005 "limit
+        # exceeded"). Walk backward in chunks, throttle between calls, and
+        # retry with smaller chunks on rate-limit errors.
+        CHUNK = 2_000
+        MIN_CHUNK = 250
+        INTER_CALL_SLEEP = 0.25  # seconds between getLogs calls
+        RATE_LIMIT_BACKOFF = 1.5  # seconds when rpc says "limit exceeded"
         budget = max(CHUNK, int(lookback_blocks))
         events: list[dict[str, Any]] = []
         scanned = 0
         cursor = head
+        chunk_size = CHUNK
+
+        def _is_rate_limit(err: Exception) -> bool:
+            msg = str(err).lower()
+            return "limit exceeded" in msg or "-32005" in msg or "rate" in msg
 
         while cursor > 0 and scanned < budget and len(events) < max(1, int(limit)) * 2:
             chunk_to = cursor
-            chunk_from = max(0, cursor - CHUNK + 1)
+            chunk_from = max(0, cursor - chunk_size + 1)
+            rate_limited_this_round = False
             for topics in (
                 [transfer_topic, addr_topic, None],
                 [transfer_topic, None, addr_topic],
             ):
-                try:
-                    logs = w3.eth.get_logs(
-                        {
-                            "fromBlock": chunk_from,
-                            "toBlock": chunk_to,
-                            "address": contract_addr,
-                            "topics": topics,
-                        }
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "[BscPayout] eth_getLogs {}-{} failed: {}",
-                        chunk_from,
-                        chunk_to,
-                        exc,
-                    )
-                    continue
+                # Two attempts: first at current chunk_size, second at half
+                # chunk_size if the node complains about size/rate.
+                attempts = 0
+                cur_from = chunk_from
+                cur_to = chunk_to
+                while attempts < 2:
+                    try:
+                        logs = w3.eth.get_logs(
+                            {
+                                "fromBlock": cur_from,
+                                "toBlock": cur_to,
+                                "address": contract_addr,
+                                "topics": topics,
+                            }
+                        )
+                        break
+                    except Exception as exc:
+                        if _is_rate_limit(exc):
+                            rate_limited_this_round = True
+                            time.sleep(RATE_LIMIT_BACKOFF)
+                            # On retry, narrow the upper half only.
+                            mid = (cur_from + cur_to) // 2
+                            cur_from = mid + 1
+                            attempts += 1
+                            continue
+                        logger.warning(
+                            "[BscPayout] eth_getLogs {}-{} failed: {}",
+                            cur_from,
+                            cur_to,
+                            exc,
+                        )
+                        logs = []
+                        break
+                else:
+                    logs = []
                 for lg in logs:
                     try:
                         raw_topics = lg["topics"]
@@ -408,8 +436,15 @@ class BscPayoutClient:
                     except Exception as exc:  # pragma: no cover - defensive
                         logger.warning("[BscPayout] log parse failed: {}", exc)
                         continue
+                # Polite throttle between calls to avoid -32005 spam.
+                time.sleep(INTER_CALL_SLEEP)
             scanned += chunk_to - chunk_from + 1
             cursor = chunk_from - 1
+            # Adapt chunk size: shrink on rate limit, grow back slowly.
+            if rate_limited_this_round:
+                chunk_size = max(MIN_CHUNK, chunk_size // 2)
+            elif chunk_size < CHUNK:
+                chunk_size = min(CHUNK, chunk_size * 2)
 
         # Dedupe by (hash, log_index) — incoming/outgoing self-transfers
         # would otherwise appear twice.

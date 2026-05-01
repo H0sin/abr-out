@@ -31,6 +31,8 @@ RUN npm run build
 FROM base AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
+        postgresql-client \
+        gzip \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=pybuilder /opt/venv /opt/venv

@@ -1,0 +1,25 @@
+[Unit]
+Description=abr-out Iran-side outbound prober
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Drop a /etc/abr-out-prober.env with API_BASE / API_INTERNAL_TOKEN / etc.
+EnvironmentFile=-/etc/abr-out-prober.env
+ExecStart=/usr/local/bin/iran-prober.sh
+Restart=on-failure
+RestartSec=10
+# The script writes its lock to /var/run; needs a writable runtime dir.
+RuntimeDirectory=abr-out-prober
+StandardOutput=journal
+StandardError=journal
+# Hardening — the script only needs outbound TCP and a writable /tmp.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/run
+
+[Install]
+WantedBy=multi-user.target

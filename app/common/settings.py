@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     # Optional explicit join URL. If empty and required_channel starts with
     # "@", a t.me link is derived automatically.
     required_channel_url: str = Field(default="")
+    # Backup bot: a separate Telegram bot used only to deliver scheduled
+    # database dumps to admin chats. Empty disables the backup job.
+    backup_bot_token: str = Field(default="")
+    # Hours between automatic DB backups (set to 0 to disable scheduling).
+    backup_interval_hours: int = Field(default=24)
 
     # Database
     postgres_user: str = "abrout"
@@ -52,6 +57,13 @@ class Settings(BaseSettings):
     # When False, the poller still reads and bills via diff but does not
     # call resetAllClientTraffics — useful for debugging.
     traffic_reset_enabled: bool = True
+
+    # Listing quality gate. Sellers' new listings start in ``pending`` and
+    # are promoted to ``active`` on the first ok=true PingSample. If no
+    # successful ping arrives within this many minutes the listing is
+    # hard-deleted (panel inbound + DB row). Tune up if Iran-side prober
+    # interval is slow.
+    listing_quality_gate_minutes: int = 5
 
     # Payments
     nowpayments_api_key: str = ""

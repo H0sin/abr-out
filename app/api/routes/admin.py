@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -36,6 +37,12 @@ from app.common.settings import get_settings
 from app.common.telegram_bot import send_message
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+# In-memory TTL cache for the on-chain wallet transactions endpoint. This
+# prevents repeated UI refreshes from re-running the (slow, rate-limited)
+# RPC ``eth_getLogs`` fallback when no BscScan key is configured.
+_WALLET_TX_CACHE_TTL = 90.0  # seconds
+_wallet_tx_cache: dict[tuple[str, int, int], tuple[float, "WalletTxPage"]] = {}
 
 
 # ---------- Schemas ----------
@@ -793,6 +800,12 @@ async def wallet_transactions(
             note="کلید خصوصی هات‌ولت تنظیم نشده است.",
         )
 
+    cache_key = (asset, page, size)
+    now = time.time()
+    cached = _wallet_tx_cache.get(cache_key)
+    if cached and now - cached[0] < _WALLET_TX_CACHE_TTL:
+        return cached[1]
+
     bscscan = get_bscscan_client()
     items: list[WalletTx] = []
 
@@ -821,7 +834,9 @@ async def wallet_transactions(
                     items.append(tx)
             items.sort(key=lambda t: (t.timestamp or 0, t.block), reverse=True)
             items = items[:size]
-            return WalletTxPage(items=items, page=page, size=size, source="bscscan")
+            page_obj = WalletTxPage(items=items, page=page, size=size, source="bscscan")
+            _wallet_tx_cache[cache_key] = (now, page_obj)
+            return page_obj
         except BscScanError as exc:
             logger.warning("[admin/wallet] BscScan failed, falling back to RPC: {}", exc)
 
@@ -836,7 +851,7 @@ async def wallet_transactions(
         )
     try:
         events = await client.list_recent_token_transfers(
-            lookback_blocks=200_000, limit=size
+            lookback_blocks=50_000, limit=size
         )
     except Exception as exc:
         logger.warning("[admin/wallet] RPC fallback failed: {}", exc)
@@ -870,5 +885,7 @@ async def wallet_transactions(
         if asset == "all"
         else None
     )
-    return WalletTxPage(items=items, page=page, size=size, source="rpc", note=note)
+    page_obj = WalletTxPage(items=items, page=page, size=size, source="rpc", note=note)
+    _wallet_tx_cache[cache_key] = (now, page_obj)
+    return page_obj
 

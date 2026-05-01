@@ -35,6 +35,13 @@ export function Sell() {
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<Listing | null>(null);
+  // Quality-gate watch: after submit the listing starts in ``pending`` and
+  // the worker promotes it to ``active`` only when the Iran-side prober
+  // posts a successful ping sample. We poll /listings/mine every 10s until
+  // either the listing turns active (success), disappears (rejected), or
+  // the 5-minute deadline elapses.
+  const [pendingId, setPendingId] = useState<number | null>(null);
+  const [pendingDeadline, setPendingDeadline] = useState<number | null>(null);
   const toast = useToast();
 
   const usedCount = mine?.length ?? 0;
@@ -70,14 +77,23 @@ export function Sell() {
     }
     setBusy(true);
     try {
-      await api.createListing({
+      const created = await api.createListing({
         title: title.trim(),
         iran_host: host.trim(),
         port: parseInt(port, 10),
         price_per_gb_usd: parseFloat(price),
       });
       haptic.success();
-      toast.success("اوت‌باند با موفقیت ثبت و فعال شد.");
+      if (created.status === "pending") {
+        setPendingId(created.id);
+        // Match the backend deadline (listing_quality_gate_minutes, default 5).
+        // We give the UI a small extra grace window so the final toast lands
+        // even if the worker tick is slightly delayed.
+        setPendingDeadline(Date.now() + 5 * 60 * 1000 + 30_000);
+        toast.success("اوت‌باند ثبت شد و در انتظار بررسی کیفیت است.");
+      } else {
+        toast.success("اوت‌باند با موفقیت ثبت و فعال شد.");
+      }
       setTitle("");
       setHost("");
       setPort("");
@@ -103,6 +119,60 @@ export function Sell() {
   // Hide MainButton if user navigates away mid-flight (covered by hook cleanup).
   useEffect(() => () => undefined, []);
 
+  // Poll /listings/mine every 10s while a pending listing is being verified.
+  // Three terminal states: promoted to active (success), disappeared from
+  // ``mine`` (the quality-gate worker hard-deleted it), or deadline elapsed
+  // (the worker is lagging — we stop polling and let the seller refresh
+  // manually).
+  useEffect(() => {
+    if (pendingId == null) return;
+
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const list = await api.listMyListings();
+        if (cancelled) return;
+        const row = list.find((l) => l.id === pendingId);
+        if (!row) {
+          setPendingId(null);
+          setPendingDeadline(null);
+          haptic.error();
+          toast.error(
+            "اوت‌باند تأیید نشد — سرور ایران پاسخگو نبود و ثبت لغو شد.",
+          );
+          refetch();
+          return;
+        }
+        if (row.status === "active") {
+          setPendingId(null);
+          setPendingDeadline(null);
+          haptic.success();
+          toast.success("کیفیت تأیید شد، اوت‌باند فعال است.");
+          refetch();
+          return;
+        }
+        if (pendingDeadline != null && Date.now() > pendingDeadline) {
+          setPendingId(null);
+          setPendingDeadline(null);
+          toast.error(
+            "بررسی کیفیت طولانی شد. لطفاً صفحه را به‌روز کنید تا وضعیت نهایی نمایش داده شود.",
+          );
+          refetch();
+          return;
+        }
+      } catch {
+        // Transient network error — keep polling.
+      }
+    };
+
+    void tick();
+    const id = window.setInterval(tick, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [pendingId, pendingDeadline, refetch, toast]);
+
   return (
     <div>
       <h2>فروش اوت‌باند</h2>
@@ -113,6 +183,25 @@ export function Sell() {
         ظرفیت ثبت: <span className="num">{usedCount}</span> / {MAX_LISTINGS}
         {atCap && " — برای ثبت جدید یکی از اوت‌باندها را حذف کنید"}
       </p>
+
+      {pendingId != null && (
+        <div
+          className="card mt-3"
+          style={{ borderLeft: "3px solid var(--warn, #d4a017)" }}
+        >
+          <div className="row gap-2" style={{ alignItems: "center" }}>
+            <span className="spinner" />
+            <div style={{ flex: 1 }}>
+              <div className="title">در انتظار بررسی کیفیت</div>
+              <div className="muted" style={{ marginTop: 4, fontSize: 13 }}>
+                اوت‌باند شما ثبت شد و در حال تست از سمت سرور ایران است. تا
+                چند دقیقه دیگر در صورت اتصال موفق به‌صورت خودکار تأیید
+                می‌شود؛ در غیر این صورت ثبت لغو خواهد شد.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="card mt-3" style={{ borderLeft: "3px solid var(--accent, #2ea3a3)" }}>
         <div className="title">راهنمای فروشنده</div>

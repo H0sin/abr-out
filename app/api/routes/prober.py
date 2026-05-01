@@ -18,6 +18,16 @@ class ListingTarget(BaseModel):
     listing_id: int
     iran_host: str
     port: int
+    # Identifies the dedicated probe client added to the seller's 3x-ui
+    # inbound at listing-creation time. The Iran-side prober uses these
+    # to build a real VLESS-TCP tunnel and measure end-to-end L7 latency
+    # through it (mirrors 3x-ui's own outbound-test feature). May be
+    # ``None`` for legacy rows created before the quality-gate feature;
+    # the prober skips those.
+    panel_inbound_id: int | None = None
+    probe_client_uuid: str | None = None
+    probe_client_email: str | None = None
+    protocol_hint: str = "vless+tcp"
 
 
 class PingSampleIn(BaseModel):
@@ -40,7 +50,14 @@ async def list_targets() -> list[ListingTarget]:
             )
         )
         return [
-            ListingTarget(listing_id=r.id, iran_host=r.iran_host, port=r.port)
+            ListingTarget(
+                listing_id=r.id,
+                iran_host=r.iran_host,
+                port=r.port,
+                panel_inbound_id=r.panel_inbound_id,
+                probe_client_uuid=r.probe_client_uuid,
+                probe_client_email=r.probe_client_email,
+            )
             for r in result.scalars().all()
         ]
 
