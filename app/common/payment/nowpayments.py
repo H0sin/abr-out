@@ -18,7 +18,7 @@ NOWPAYMENTS_BASE = "https://api.nowpayments.io/v1"
 # Reference cheapest/common coin used to estimate the global USD floor for
 # top-ups. NowPayments returns a per-coin minimum, so we pick a widely
 # supported low-fee coin to compute a permissive lower bound.
-_MIN_AMOUNT_REF_COIN = "usdttrc20"
+_MIN_AMOUNT_REF_COIN = "usdtbsc"
 _MIN_AMOUNT_CACHE_TTL_SEC = 600  # 10 minutes
 
 _min_cache: dict[str, float | Decimal | None] = {"value": None, "ts": 0.0}
