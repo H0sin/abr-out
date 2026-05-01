@@ -84,8 +84,10 @@ class Settings(BaseSettings):
     )
     # BscScan API for the admin "withdrawal wallet" view (read-only on-chain
     # transaction history). Empty key falls back to RPC eth_getLogs scanning.
+    # We use Etherscan's unified multi-chain V2 endpoint and pin chainid=56
+    # (BSC) at call sites — the legacy api.bscscan.com V1 was deprecated.
     bscscan_api_key: str = ""
-    bscscan_base_url: str = "https://api.bscscan.com/api"
+    bscscan_base_url: str = "https://api.etherscan.io/v2/api"
 
     # Public URL settings.
     # Set DOMAIN to your Cloudflare-fronted domain (e.g. example.com).

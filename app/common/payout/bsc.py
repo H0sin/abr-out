@@ -343,57 +343,73 @@ class BscPayoutClient:
         except Exception as exc:
             logger.warning("[BscPayout] block_number failed: {}", exc)
             return []
-        from_block = max(0, head - max(1, int(lookback_blocks)))
         addr_topic = "0x" + addr.lower().replace("0x", "").rjust(64, "0")
         decimals = self._usdt_decimals()
         scale = Decimal(10**decimals)
 
+        # Public BSC RPCs cap eth_getLogs to a few thousand blocks per call
+        # (typically 5k). Walk backward in chunks until we have enough events
+        # or hit the requested lookback budget.
+        CHUNK = 4_000
+        budget = max(CHUNK, int(lookback_blocks))
         events: list[dict[str, Any]] = []
-        # Two queries: outgoing (topic1==addr) + incoming (topic2==addr).
-        for topics in (
-            [transfer_topic, addr_topic, None],
-            [transfer_topic, None, addr_topic],
-        ):
-            try:
-                logs = w3.eth.get_logs(
-                    {
-                        "fromBlock": from_block,
-                        "toBlock": "latest",
-                        "address": contract_addr,
-                        "topics": topics,
-                    }
-                )
-            except Exception as exc:
-                logger.warning("[BscPayout] eth_getLogs failed: {}", exc)
-                continue
-            for lg in logs:
+        scanned = 0
+        cursor = head
+
+        while cursor > 0 and scanned < budget and len(events) < max(1, int(limit)) * 2:
+            chunk_to = cursor
+            chunk_from = max(0, cursor - CHUNK + 1)
+            for topics in (
+                [transfer_topic, addr_topic, None],
+                [transfer_topic, None, addr_topic],
+            ):
                 try:
-                    raw_topics = lg["topics"]
-                    frm = "0x" + raw_topics[1].hex()[-40:]
-                    to = "0x" + raw_topics[2].hex()[-40:]
-                    data_hex = lg["data"]
-                    if hasattr(data_hex, "hex"):
-                        data_hex = data_hex.hex()
-                    raw_amount = int(data_hex, 16) if data_hex else 0
-                    block_num = int(lg["blockNumber"])
-                    events.append(
+                    logs = w3.eth.get_logs(
                         {
-                            "hash": lg["transactionHash"].hex()
-                            if hasattr(lg["transactionHash"], "hex")
-                            else str(lg["transactionHash"]),
-                            "from": Web3.to_checksum_address(frm),
-                            "to": Web3.to_checksum_address(to),
-                            "amount": (Decimal(raw_amount) / scale).quantize(
-                                Decimal("0.00000001"), rounding=ROUND_DOWN
-                            ),
-                            "block": block_num,
-                            "log_index": int(lg.get("logIndex", 0) or 0),
-                            "timestamp": None,
+                            "fromBlock": chunk_from,
+                            "toBlock": chunk_to,
+                            "address": contract_addr,
+                            "topics": topics,
                         }
                     )
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.warning("[BscPayout] log parse failed: {}", exc)
+                except Exception as exc:
+                    logger.warning(
+                        "[BscPayout] eth_getLogs {}-{} failed: {}",
+                        chunk_from,
+                        chunk_to,
+                        exc,
+                    )
                     continue
+                for lg in logs:
+                    try:
+                        raw_topics = lg["topics"]
+                        frm = "0x" + raw_topics[1].hex()[-40:]
+                        to = "0x" + raw_topics[2].hex()[-40:]
+                        data_hex = lg["data"]
+                        if hasattr(data_hex, "hex"):
+                            data_hex = data_hex.hex()
+                        raw_amount = int(data_hex, 16) if data_hex else 0
+                        block_num = int(lg["blockNumber"])
+                        events.append(
+                            {
+                                "hash": lg["transactionHash"].hex()
+                                if hasattr(lg["transactionHash"], "hex")
+                                else str(lg["transactionHash"]),
+                                "from": Web3.to_checksum_address(frm),
+                                "to": Web3.to_checksum_address(to),
+                                "amount": (Decimal(raw_amount) / scale).quantize(
+                                    Decimal("0.00000001"), rounding=ROUND_DOWN
+                                ),
+                                "block": block_num,
+                                "log_index": int(lg.get("logIndex", 0) or 0),
+                                "timestamp": None,
+                            }
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.warning("[BscPayout] log parse failed: {}", exc)
+                        continue
+            scanned += chunk_to - chunk_from + 1
+            cursor = chunk_from - 1
 
         # Dedupe by (hash, log_index) — incoming/outgoing self-transfers
         # would otherwise appear twice.

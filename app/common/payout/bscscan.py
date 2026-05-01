@@ -94,7 +94,13 @@ class BscScanClient:
             cached = self._cache.get(key)
             if cached and time.time() - cached.ts < _CACHE_TTL_SEC:
                 return cached.data
-            full = {**params, "apikey": self._settings.bscscan_api_key.strip()}
+            # The legacy api.bscscan.com V1 endpoint is deprecated. We always
+            # talk to Etherscan's unified V2 API and pin chainid=56 (BSC).
+            full = {
+                **params,
+                "chainid": 56,
+                "apikey": self._settings.bscscan_api_key.strip(),
+            }
             try:
                 async with httpx.AsyncClient(timeout=10) as client:
                     r = await client.get(self._settings.bscscan_base_url, params=full)
