@@ -40,6 +40,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY app ./app
 COPY migrations ./migrations
+COPY scripts ./scripts
 COPY alembic.ini ./alembic.ini
 
 # Built React Mini App (FastAPI mounts this at /app)
