@@ -44,10 +44,11 @@ cat >/etc/abr-out-prober.env <<'EOF'
 API_BASE=https://api.example.com
 API_INTERNAL_TOKEN=<same-as-bot-side>
 PROBE_INTERVAL_SEC=60
-PROBE_TIMEOUT_SEC=8
+PROBE_TIMEOUT_SEC=10
 # Optional overrides:
 # XRAY_BIN=/usr/local/bin/xray
 # XRAY_LOCAL_PORT=10808
+# XRAY_BOOT_WAIT_MS=3000
 # L7_TEST_URL=https://www.google.com/generate_204
 EOF
 chmod 600 /etc/abr-out-prober.env
@@ -77,12 +78,16 @@ Every `PROBE_INTERVAL_SEC` seconds the script:
    with a SOCKS5 inbound on `127.0.0.1:${XRAY_LOCAL_PORT}` paired with a
    VLESS-TCP outbound (`address=iran_host`, `port=port`,
    `id=probe_client_uuid`, `network=tcp`, `security=none`).
-3. Spawns `xray run -c /tmp/...`, waits up to `XRAY_BOOT_WAIT_MS` for
-   the loopback port to accept connections, fires a warmup request, then
-   measures `time_total` for a second `curl --socks5h ...
-   ${L7_TEST_URL}` call. The warmup is what 3x-ui's own outbound test
-   does — it absorbs DNS/TCP/TLS handshake noise so the measured number
-   reflects steady-state latency through the tunnel.
+3. Spawns `xray run -c /tmp/...`, waits up to `XRAY_BOOT_WAIT_MS`
+   (default 3 s, matching 3x-ui) for the loopback port to accept
+   connections, then fires **a single curl invocation that hits the
+   test URL twice in a row** so HTTP/1.1 keep-alive lets the second
+   request reuse the SOCKS + TCP + TLS connection paid for by the
+   first. The `time_total` reported for the warm request is what we
+   record — this is exactly what 3x-ui's "lightning" outbound-test
+   button does in [`web/service/outbound.go::testConnection`](https://github.com/MHSanaei/3x-ui/blob/main/web/service/outbound.go).
+   Without this trick every probe rebuilds the entire tunnel and the
+   reported RTT is inflated 4-7x relative to the panel's number.
 4. `kill`s xray, builds a JSON sample
    `{listing_id, rtt_ms, ok, sampled_at}` and accumulates them.
 5. POSTs the array to `${API_BASE}/internal/prober/samples`.
@@ -97,11 +102,13 @@ at a time on the host (so `XRAY_LOCAL_PORT` does not collide).
   `stability_pct` from the last 24h of all samples
   (`ok_count * 100 / total`).
 - `listing_quality_gate_once` (every 30s) promotes a `pending`
-  listing to `active` on the first `ok=true` sample, or hard-deletes
-  it (panel inbound + DB row) once `pending_until_at` (5 min after
-  creation) has passed without one. The seller's UI shows a
-  "awaiting quality check" banner until the listing is either
-  promoted or removed.
+  listing to `active` on the first `ok=true` sample, or moves it to
+  `broken` once `pending_until_at` (5 min after creation) has passed
+  without one. Broken listings keep their panel inbound + probe
+  client; the seller sees a "connection failed" badge with a
+  "retry test" button, and the prober continues to re-test broken
+  rows on a slower cadence so they recover automatically once the
+  Iran-side tunnel is healthy again.
 
 ## Required env
 

@@ -24,11 +24,10 @@
 #
 # Optional env (with defaults):
 #   PROBE_INTERVAL_SEC    60     seconds between cycles
-#   PROBE_TIMEOUT_SEC     8      per-request curl timeout
-#   PROBE_WARMUP_SEC      5      per-request curl timeout for the warmup
+#   PROBE_TIMEOUT_SEC     10     per-URL curl timeout (matches 3x-ui's 10s)
 #   XRAY_BIN              xray   path to the xray-core binary
 #   XRAY_LOCAL_PORT       10808  loopback SOCKS port reused across probes
-#   XRAY_BOOT_WAIT_MS     400    wait for xray to start listening
+#   XRAY_BOOT_WAIT_MS     3000   wait for xray to start listening (3x-ui uses 3s)
 #   L7_TEST_URL           https://www.google.com/generate_204
 #   API_INSECURE          0      set 1 to add `curl -k` (self-signed cert,
 #                                e.g. when API_BASE is a raw IP behind
@@ -47,12 +46,10 @@ readonly TMP_DIR="${TMP_DIR:-/tmp/iran-prober}"
 API_BASE="${API_BASE:-}"
 API_INTERNAL_TOKEN="${API_INTERNAL_TOKEN:-}"
 PROBE_INTERVAL_SEC="${PROBE_INTERVAL_SEC:-60}"
-PROBE_TIMEOUT_SEC="${PROBE_TIMEOUT_SEC:-8}"
-PROBE_WARMUP_SEC="${PROBE_WARMUP_SEC:-5}"
+PROBE_TIMEOUT_SEC="${PROBE_TIMEOUT_SEC:-10}"
 XRAY_BIN="${XRAY_BIN:-xray}"
 XRAY_LOCAL_PORT="${XRAY_LOCAL_PORT:-10808}"
-XRAY_BOOT_WAIT_MS="${XRAY_BOOT_WAIT_MS:-400}"
-L7_TEST_URL="${L7_TEST_URL:-https://www.google.com/generate_204}"
+XRAY_BOOT_WAIT_MS="${XRAY_BOOT_WAIT_MS:-3000}"L7_TEST_URL="${L7_TEST_URL:-https://www.google.com/generate_204}"
 # Set API_INSECURE=1 if API_BASE points at a self-signed endpoint
 # (e.g. raw IP behind Caddy's `tls internal`). Adds curl -k.
 API_INSECURE="${API_INSECURE:-0}"
@@ -112,13 +109,13 @@ write_xray_config() {
         --arg uuid "$client_uuid" \
         --argjson local_port "$XRAY_LOCAL_PORT" \
         '{
-            log: { loglevel: "warning" },
+            log: { loglevel: "warning", access: "none", error: "none" },
             inbounds: [{
                 tag: "probe-in",
                 listen: "127.0.0.1",
                 port: $local_port,
                 protocol: "socks",
-                settings: { auth: "noauth", udp: false }
+                settings: { auth: "noauth", udp: true }
             }],
             outbounds: [{
                 tag: "probe-out",
@@ -148,6 +145,7 @@ write_xray_config() {
                 rules: [{
                     type: "field",
                     inboundTag: ["probe-in"],
+                    network: "tcp,udp",
                     outboundTag: "probe-out"
                 }]
             }
@@ -185,7 +183,9 @@ probe_one() {
     }
     trap cleanup RETURN
 
-    # Wait for the loopback SOCKS port to start accepting connections.
+    # Wait for the loopback SOCKS port to start accepting connections
+    # (and for xray to have wired up the outbound). 3x-ui waits up to
+    # 3 seconds before giving up.
     local waited=0
     while ! curl -s --connect-timeout 1 -o /dev/null \
         --socks5-hostname "127.0.0.1:$XRAY_LOCAL_PORT" \
@@ -197,18 +197,22 @@ probe_one() {
         sleep 0.1
     done
 
-    # Warmup request (tunnel + DNS + TLS handshake) — discard result.
-    curl -s -o /dev/null \
-        --socks5-hostname "127.0.0.1:$XRAY_LOCAL_PORT" \
-        --max-time "$PROBE_WARMUP_SEC" \
-        "$L7_TEST_URL" >/dev/null 2>&1 || true
-
-    # Measured request: capture http_code + time_total in one call.
-    curl_out="$(curl -s -o /dev/null \
+    # Latency measurement, mirroring 3x-ui's TestOutbound exactly:
+    # one curl invocation hits the test URL TWICE so HTTP/1.1
+    # keep-alive lets the second request reuse the same SOCKS + TCP +
+    # TLS connection that was paid for by the first. -w prints once
+    # per URL; we keep only the last line (the warm request) and
+    # discard the first. Without this trick every request rebuilds
+    # the entire tunnel, inflating the reported RTT 4-7x relative to
+    # what the 3x-ui "lightning" button shows.
+    curl_out="$(curl -sS --http1.1 -o /dev/null -o /dev/null \
         --socks5-hostname "127.0.0.1:$XRAY_LOCAL_PORT" \
         --max-time "$PROBE_TIMEOUT_SEC" \
-        -w '%{http_code} %{time_total}' \
-        "$L7_TEST_URL" 2>/dev/null || true)"
+        --connect-timeout 5 \
+        --keepalive-time 30 \
+        -w '%{http_code} %{time_total}\n' \
+        "$L7_TEST_URL" "$L7_TEST_URL" 2>/dev/null \
+        | tail -n 1 || true)"
 
     local code="" time_total=""
     read -r code time_total <<<"$curl_out"

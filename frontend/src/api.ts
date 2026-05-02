@@ -274,6 +274,8 @@ export const api = {
     request<Listing>(`/api/listings/${id}/disable`, { method: "POST" }),
   enableListing: (id: number) =>
     request<Listing>(`/api/listings/${id}/enable`, { method: "POST" }),
+  retryListing: (id: number) =>
+    request<Listing>(`/api/listings/${id}/retry`, { method: "POST" }),
   deleteListing: (id: number) =>
     request<void>(`/api/listings/${id}`, { method: "DELETE" }),
   // ---------- withdrawals ----------

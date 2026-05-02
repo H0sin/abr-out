@@ -521,6 +521,42 @@ async def enable_listing(
     return _listing_to_out(listing, user.username)
 
 
+@router.post("/{listing_id}/retry", response_model=ListingOut)
+async def retry_listing(
+    listing_id: int,
+    user: User = Depends(current_user),
+) -> ListingOut:
+    """Re-run the quality gate for a ``broken`` listing.
+
+    Sellers see a "retry test" button on listings whose first quality
+    check failed (or that fell out of the marketplace later). Hitting it
+    flips the row back to ``pending`` with a fresh deadline; the
+    Iran-side prober already includes pending listings on every cycle,
+    so a successful ping in the next ``listing_quality_gate_minutes``
+    window promotes it back to ``active`` automatically.
+    """
+    async with SessionLocal() as session:
+        listing = await _load_owned_listing(session, listing_id, user)
+        if listing.status != ListingStatus.broken:
+            raise HTTPException(
+                409, detail="retry only allowed for broken listings"
+            )
+        settings = get_settings()
+        listing.status = ListingStatus.pending
+        listing.pending_until_at = datetime.now(timezone.utc) + timedelta(
+            minutes=settings.listing_quality_gate_minutes
+        )
+        listing.broken_since = None
+        await session.commit()
+        await session.refresh(listing)
+        logger.info(
+            "[listings.retry] listing_id={} reset to pending until={}",
+            listing.id,
+            listing.pending_until_at,
+        )
+    return _listing_to_out(listing, user.username)
+
+
 @router.patch("/{listing_id}", response_model=ListingOut)
 async def patch_listing(
     listing_id: int,

@@ -356,9 +356,9 @@ export function Sell() {
               className="muted mt-2"
               style={{ fontSize: 12, lineHeight: 1.7 }}
             >
-              اوت‌باند موقتاً ناپایدار است و از مارکت پنهان شده. هر ۱۰
-              دقیقه به‌صورت خودکار دوباره بررسی می‌شود؛ پس از دو پینگ
-              موفق پیاپی به‌طور خودکار به فهرست خرید بازمی‌گردد.
+              اتصال به اوت‌باند برقرار نشد و فعلاً از مارکت پنهان است.
+              اتصال سرور ایرانی خود را بررسی کنید و سپس دکمهٔ «تست
+              مجدد» را بزنید؛ بررسی خودکار هر ۱۰ دقیقه هم ادامه دارد.
             </div>
           )}
           <div className="muted mt-2">
@@ -413,7 +413,7 @@ function ListingActions({
   onEdit: () => void;
   onChanged: () => void;
 }) {
-  const [busy, setBusy] = useState<"" | "toggle" | "delete">("");
+  const [busy, setBusy] = useState<"" | "toggle" | "delete" | "retry">("");
   const toast = useToast();
   // ``broken`` is a worker-managed transient state — for the seller's
   // purposes it behaves like ``active`` (re-disable hides it from the
@@ -423,6 +423,7 @@ function ListingActions({
     listing.status === "active" || listing.status === "broken";
   const isDeleted = listing.status === "deleted";
   const isPending = listing.status === "pending";
+  const isBroken = listing.status === "broken";
 
   if (isDeleted) return null;
 
@@ -467,6 +468,32 @@ function ListingActions({
 
   return (
     <div className="row gap-2 mt-2">
+      {isBroken && (
+        <button
+          className="btn btn-primary"
+          style={{ flex: 1 }}
+          onClick={async () => {
+            if (busy) return;
+            setBusy("retry");
+            try {
+              await api.retryListing(listing.id);
+              haptic.success();
+              toast.success(
+                "درخواست تست مجدد ثبت شد؛ تا چند دقیقه دیگه دوباره بررسی می‌شود.",
+              );
+              onChanged();
+            } catch (e) {
+              haptic.error();
+              toast.error(e instanceof ApiError ? e.message : "خطا");
+            } finally {
+              setBusy("");
+            }
+          }}
+          disabled={!!busy}
+        >
+          {busy === "retry" ? "..." : "تست مجدد"}
+        </button>
+      )}
       <button
         className="btn btn-secondary"
         style={{ flex: 1 }}

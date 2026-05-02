@@ -10,19 +10,21 @@ This job runs every 30s and performs three passes:
 
 1. **Pending pass.** Promotes any pending listing that has at least one
    ``ok=true`` sample recorded after ``created_at`` to ``active``
-   (clears ``pending_until_at``). Hard-deletes any pending listing whose
-   ``pending_until_at`` has passed without a single successful ping
-   (best-effort ``XuiClient.delete_inbound`` then
-   ``DELETE FROM listings``).
+   (clears ``pending_until_at``). When ``pending_until_at`` elapses
+   without a successful ping, the listing is moved to ``broken``
+   instead of being deleted — the panel inbound + probe client stay
+   put so the seller can hit "retry test" (resets to ``pending`` for
+   another 5-min window) or wait for the periodic broken-reprobe
+   cadence to recover it automatically.
 
 2. **Demote pass.** ``active`` -> ``broken`` when the listing has gone
    ``listing_broken_after_minutes`` (default 10) without an ok sample
-   while still being probed (we require at least one PingSample after
-   ``created_at`` so a brand-new active listing whose probes haven't
-   landed yet isn't demoted prematurely). The row is hidden from the
-   marketplace but kept around — buyer configs continue to bill if the
-   tunnel briefly recovers, and the prober still re-tests the host on a
-   slower cadence (see `prober.list_targets`).
+   while still being probed (we require recent ``last_probed_at`` so a
+   brand-new active listing whose probes haven't landed yet isn't
+   demoted prematurely). The row is hidden from the marketplace but
+   kept around — buyer configs continue to bill if the tunnel briefly
+   recovers, and the prober still re-tests the host on a slower cadence
+   (see `prober.list_targets`).
 
 3. **Recover pass.** ``broken`` -> ``active`` when the last
    ``listing_recovery_consecutive_ok`` (default 2) PingSample rows since
@@ -33,12 +35,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, exists, select, update
+from sqlalchemy import exists, select, update
 
 from app.common.db.models import Listing, ListingStatus, PingSample
 from app.common.db.session import SessionLocal
 from app.common.logging import logger
-from app.common.panel.xui_client import XuiClient, XuiError
 from app.common.settings import get_settings
 
 
@@ -133,10 +134,18 @@ async def listing_quality_gate_once() -> None:
 
 
 async def _pending_pass(session, rows, now: datetime) -> None:
-    """Original pending->active / pending->hard-delete logic."""
+    """Pending lifecycle.
+
+    - Promotes any pending listing that has at least one ``ok=true``
+      sample since ``created_at`` to ``active``.
+    - Demotes any pending listing whose ``pending_until_at`` deadline
+      has elapsed without a successful ping to ``broken`` (keeping the
+      panel inbound + probe client intact). The seller's UI shows the
+      row with a "connection failed" badge and a "retry test" button
+      that resets it back to ``pending`` for another quality-gate pass.
+    """
     promoted = 0
-    rejected_ids: list[int] = []
-    rejected_inbound_ids: list[int] = []
+    failed_ids: list[int] = []
 
     for listing in rows:
         # Has any ok=true sample been recorded since this listing was
@@ -166,44 +175,28 @@ async def _pending_pass(session, rows, now: datetime) -> None:
             promoted += 1
             continue
 
-        # Still no ok sample. Reject only after the deadline has passed
+        # Still no ok sample. Mark as broken once the deadline elapses
         # (a missing deadline is treated as "now" so legacy rows do not
-        # linger forever).
+        # linger forever in ``pending``). Keep the panel inbound + probe
+        # client around so the seller can hit "retry" or the periodic
+        # broken-reprobe cadence picks it up.
         deadline = listing.pending_until_at
         if deadline is None or deadline <= now:
-            rejected_ids.append(listing.id)
-            if listing.panel_inbound_id is not None:
-                rejected_inbound_ids.append(int(listing.panel_inbound_id))
-
-    if rejected_ids:
-        # Best-effort panel cleanup BEFORE the DB delete so a transient
-        # panel error does not leave orphan inbounds. We swallow XuiError
-        # because the row will be removed regardless.
-        for inbound_id in rejected_inbound_ids:
-            try:
-                async with XuiClient() as xui:
-                    await xui.delete_inbound(inbound_id)
-            except XuiError as e:
-                logger.warning(
-                    "[quality_gate] panel delete_inbound {} failed: {}",
-                    inbound_id,
-                    e,
+            await session.execute(
+                update(Listing)
+                .where(Listing.id == listing.id)
+                .values(
+                    status=ListingStatus.broken,
+                    broken_since=now,
+                    pending_until_at=None,
                 )
-            except Exception as e:  # noqa: BLE001
-                logger.exception(
-                    "[quality_gate] panel delete_inbound {} unexpected: {}",
-                    inbound_id,
-                    e,
-                )
+            )
+            failed_ids.append(listing.id)
 
-        await session.execute(
-            delete(Listing).where(Listing.id.in_(rejected_ids))
-        )
-
-    if promoted or rejected_ids:
+    if promoted or failed_ids:
         logger.info(
-            "[quality_gate] promoted={} rejected={} (ids={})",
+            "[quality_gate] promoted={} failed={} (failed_ids={})",
             promoted,
-            len(rejected_ids),
-            rejected_ids,
+            len(failed_ids),
+            failed_ids,
         )
