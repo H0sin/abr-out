@@ -1128,6 +1128,8 @@ select {
      hidden behind the browser chrome and cause overflow with no scroll. */
   max-height: calc(100vh - 32px);
   max-height: calc(100dvh - 32px);
+  /* Anchor for the absolutely-positioned action bar below. */
+  position: relative;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1140,6 +1142,10 @@ select {
 }
 .modal-body {
   padding: 0 18px;
+  /* Reserved space at the bottom so the absolutely-positioned action bar
+     never overlaps the last form field. Matches the bar's natural height
+     (button ~42px + 24px vertical padding). */
+  padding-bottom: 76px;
   flex: 1 1 auto;
   /* min-height: 0 is critical for overflow inside a flex column parent —
      without it the body refuses to shrink below its content height and
@@ -1156,15 +1162,17 @@ select {
 .modal-actions {
   display: flex;
   gap: 8px;
-  /* Negative side margins make the bar full-bleed across modal-body's
-     18px horizontal padding so the sticky background fully covers the
-     content scrolling under it. */
-  margin: 14px -18px 0;
-  padding: 12px 18px;
-  position: sticky;
+  /* Pinned to the modal's bottom edge — outside the scrolling body so the
+     buttons stay visible no matter how long the form is. */
+  position: absolute;
+  left: 0;
+  right: 0;
   bottom: 0;
+  padding: 12px 18px;
   background: var(--bg-card, #fff);
+  border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08));
   box-shadow: 0 -8px 12px -8px rgba(0, 0, 0, 0.18);
+  z-index: 1;
 }
 .modal-actions > * { flex: 1; }
 
@@ -1235,7 +1243,8 @@ select {
   content: "";
   position: absolute;
   top: 2px;
-  left: 2px;
+  /* Logical start: visually right edge in RTL, left edge in LTR. */
+  inset-inline-start: 2px;
   width: 20px;
   height: 20px;
   border-radius: 50%;
@@ -1244,10 +1253,12 @@ select {
   transition: transform 0.18s ease;
 }
 .switch input:checked + .switch-slider { background: var(--accent); }
+/* In LTR the knob slides right by 18px; in RTL it slides left by 18px.
+   Both expressed as the *logical* end direction via a CSS variable so the
+   transition stays smooth in either direction. */
 .switch input:checked + .switch-slider::before { transform: translateX(18px); }
-.switch input:disabled + .switch-slider { opacity: 0.5; cursor: not-allowed; }
-/* RTL: knob slides the other direction. */
 [dir="rtl"] .switch input:checked + .switch-slider::before { transform: translateX(-18px); }
+.switch input:disabled + .switch-slider { opacity: 0.5; cursor: not-allowed; }
 
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes pop-in { from { transform: scale(0.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
