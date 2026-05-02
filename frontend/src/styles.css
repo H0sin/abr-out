@@ -1107,20 +1107,19 @@ select {
 
 
 /* ===== Modal ===== */
+/* The overlay is absolutely positioned (NOT fixed) so the *document*
+   itself grows with the modal content and the native page scroll handles
+   long forms. ``position: fixed`` overlays with internal overflow are
+   notoriously broken inside Telegram WebApp on iOS - the user can drag
+   only a millimeter before the gesture is intercepted by the WebApp's
+   swipe-to-close. With this setup the user just scrolls the page. */
 .modal-overlay {
-  position: fixed; inset: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  min-height: 100%;
   background: rgba(0, 0, 0, 0.55);
-  /* Block layout (NOT flex). On iOS/WebView, ``overflow: auto`` on a flex
-     container whose single child overflows vertically does not produce a
-     reliably scrollable area \u2014 the user can drag a millimeter and it
-     snaps back. Plain block + ``margin: 0 auto`` for the modal centers
-     horizontally and lets the overlay scroll naturally. */
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  /* ``none`` fully isolates this scroll container from the body and from
-     Telegram WebApp's swipe-to-close gesture. */
-  overscroll-behavior: none;
-  touch-action: pan-y;
   padding: 16px;
   padding-top: max(16px, env(safe-area-inset-top));
   padding-bottom: max(16px, env(safe-area-inset-bottom));

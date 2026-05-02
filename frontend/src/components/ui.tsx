@@ -163,29 +163,8 @@ export function Modal({
     };
     window.addEventListener("keydown", onKey);
 
-    // Lock the page behind the modal so the browser/Telegram WebApp doesn't
-    // fight the overlay's own scroll (which causes the "scroll then snap
-    // back" bounce on mobile). We restore the previous scroll position on
-    // close.
-    const scrollY = window.scrollY;
-    const prev = {
-      position: document.body.style.position,
-      top: document.body.style.top,
-      left: document.body.style.left,
-      right: document.body.style.right,
-      width: document.body.style.width,
-      overflow: document.body.style.overflow,
-    };
-    document.body.style.position = "fixed";
-    document.body.style.top = `-${scrollY}px`;
-    document.body.style.left = "0";
-    document.body.style.right = "0";
-    document.body.style.width = "100%";
-    document.body.style.overflow = "hidden";
-
-    // Telegram WebApp: disable the swipe-down-to-close gesture while the
-    // modal is open, otherwise dragging the overlay scroll triggers a
-    // close-attempt and the content snaps back up.
+    // Telegram WebApp: expand to full height + disable swipe-down-to-close
+    // so the user can scroll the modal freely without triggering a close.
     const tg = window.Telegram?.WebApp as
       | {
           disableVerticalSwipes?: () => void;
@@ -200,15 +179,14 @@ export function Modal({
       /* older WebApp versions don't expose these helpers */
     }
 
+    // Remember + reset page scroll so the modal opens at the top, then
+    // restore the previous scroll position on close.
+    const prevScrollY = window.scrollY;
+    window.scrollTo(0, 0);
+
     return () => {
       window.removeEventListener("keydown", onKey);
-      document.body.style.position = prev.position;
-      document.body.style.top = prev.top;
-      document.body.style.left = prev.left;
-      document.body.style.right = prev.right;
-      document.body.style.width = prev.width;
-      document.body.style.overflow = prev.overflow;
-      window.scrollTo(0, scrollY);
+      window.scrollTo(0, prevScrollY);
       try {
         tg?.enableVerticalSwipes?.();
       } catch {
