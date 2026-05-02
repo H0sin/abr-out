@@ -380,17 +380,32 @@ async def _process_listing(
 
 
 async def poll_traffic_once() -> None:
-    """One full poll cycle across every active, provisioned listing."""
+    """One full poll cycle across every provisioned (non-deleted) listing.
+
+    We deliberately do NOT filter by ``status == active``: a listing that's
+    been demoted to ``broken`` or ``disabled`` may still be carrying traffic
+    on the panel (the prober's view of health is not the panel's view of
+    traffic). Skipping them would mean buyers stop being charged and the
+    seller stops being credited even though bytes are flowing — a money
+    leak in both directions. So we bill every provisioned listing and let
+    zero-delta cycles be no-ops.
+    """
     settings = get_settings()
     cycle_id = uuid.uuid4()
     sampled_at = datetime.now(timezone.utc)
 
     async with SessionLocal() as session:
+        # Bill EVERY non-deleted, provisioned listing — regardless of status.
+        # A ``broken`` (or even ``disabled``) listing might still be passing
+        # traffic on the panel; if we filtered by status==active we'd silently
+        # drop those bytes (buyer not debited, seller not credited). We poll
+        # them all and let the panel reading drive billing — listings that
+        # really aren't moving traffic just produce a zero-delta no-op.
         rows = (
             await session.execute(
                 select(Listing.id)
                 .where(
-                    Listing.status == ListingStatus.active,
+                    Listing.status != ListingStatus.deleted,
                     Listing.panel_inbound_id.is_not(None),
                 )
                 .order_by(Listing.id)
@@ -399,7 +414,7 @@ async def poll_traffic_once() -> None:
     listing_ids = [r[0] for r in rows]
 
     if not listing_ids:
-        logger.debug("[poll] cycle={} no active listings", cycle_id)
+        logger.debug("[poll] cycle={} no provisioned listings", cycle_id)
         return
 
     logger.info(
