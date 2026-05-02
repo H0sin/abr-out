@@ -49,7 +49,8 @@ PROBE_INTERVAL_SEC="${PROBE_INTERVAL_SEC:-60}"
 PROBE_TIMEOUT_SEC="${PROBE_TIMEOUT_SEC:-10}"
 XRAY_BIN="${XRAY_BIN:-xray}"
 XRAY_LOCAL_PORT="${XRAY_LOCAL_PORT:-10808}"
-XRAY_BOOT_WAIT_MS="${XRAY_BOOT_WAIT_MS:-3000}"L7_TEST_URL="${L7_TEST_URL:-https://www.google.com/generate_204}"
+XRAY_BOOT_WAIT_MS="${XRAY_BOOT_WAIT_MS:-3000}"
+L7_TEST_URL="${L7_TEST_URL:-https://www.google.com/generate_204}"
 # Set API_INSECURE=1 if API_BASE points at a self-signed endpoint
 # (e.g. raw IP behind Caddy's `tls internal`). Adds curl -k.
 API_INSECURE="${API_INSECURE:-0}"
@@ -58,8 +59,17 @@ if [[ "$API_INSECURE" == "1" ]]; then
     API_CURL_FLAGS+=(-k)
 fi
 
+# Set DEBUG=1 to log every probe step (xray stderr, boot wait, curl
+# exit code, http code, time_total). Useful when probes silently fail.
+DEBUG="${DEBUG:-0}"
+
 log() {
     printf '%s [iran-prober] %s\n' "$(date -u +%FT%TZ)" "$*" >&2
+}
+
+dlog() {
+    [[ "$DEBUG" == "1" ]] || return 0
+    printf '%s [iran-prober][debug] %s\n' "$(date -u +%FT%TZ)" "$*" >&2
 }
 
 die() {
@@ -166,11 +176,13 @@ probe_one() {
     local now_iso
     now_iso="$(date -u +%FT%TZ)"
     local cfg_path="$TMP_DIR/probe-$listing_id.json"
+    local xray_log="$TMP_DIR/probe-$listing_id.xray.log"
     local pid="" rtt_ms="null" ok="false" curl_out=""
 
     write_xray_config "$cfg_path" "$server_host" "$server_port" "$client_uuid"
+    dlog "listing=$listing_id host=$server_host:$server_port cfg=$cfg_path"
 
-    "$XRAY_BIN" run -c "$cfg_path" >/dev/null 2>&1 &
+    "$XRAY_BIN" run -c "$cfg_path" >"$xray_log" 2>&1 &
     pid=$!
 
     # Tear down xray on every return path.
@@ -179,7 +191,9 @@ probe_one() {
             kill "$pid" 2>/dev/null || true
             wait "$pid" 2>/dev/null || true
         fi
-        rm -f "$cfg_path"
+        if [[ "$DEBUG" != "1" ]]; then
+            rm -f "$cfg_path" "$xray_log"
+        fi
     }
     trap cleanup RETURN
 
@@ -187,6 +201,7 @@ probe_one() {
     # (and for xray to have wired up the outbound). 3x-ui waits up to
     # 3 seconds before giving up.
     local waited=0
+    local boot_ok=0
     while ! curl -s --connect-timeout 1 -o /dev/null \
         --socks5-hostname "127.0.0.1:$XRAY_LOCAL_PORT" \
         --max-time 1 "https://www.google.com/generate_204" >/dev/null 2>&1; do
@@ -196,6 +211,21 @@ probe_one() {
         fi
         sleep 0.1
     done
+    # If xray died during boot, surface its stderr—it's the most useful
+    # signal when probes return null silently (e.g. config error,
+    # "address already in use" on XRAY_LOCAL_PORT, etc).
+    if ! kill -0 "$pid" 2>/dev/null; then
+        log "listing=$listing_id xray exited during boot; tail of $xray_log:"
+        tail -n 20 "$xray_log" >&2 2>/dev/null || true
+    else
+        # Final probe to verify the SOCKS port responds; if not, log it.
+        if curl -s --connect-timeout 1 -o /dev/null \
+            --socks5-hostname "127.0.0.1:$XRAY_LOCAL_PORT" \
+            --max-time 1 "https://www.google.com/generate_204" >/dev/null 2>&1; then
+            boot_ok=1
+        fi
+        dlog "listing=$listing_id boot_wait=${waited}ms boot_ok=$boot_ok"
+    fi
 
     # Latency measurement, mirroring 3x-ui's TestOutbound exactly:
     # one curl invocation hits the test URL TWICE so HTTP/1.1
@@ -205,22 +235,31 @@ probe_one() {
     # discard the first. Without this trick every request rebuilds
     # the entire tunnel, inflating the reported RTT 4-7x relative to
     # what the 3x-ui "lightning" button shows.
+    local curl_rc=0
     curl_out="$(curl -sS --http1.1 -o /dev/null -o /dev/null \
         --socks5-hostname "127.0.0.1:$XRAY_LOCAL_PORT" \
         --max-time "$PROBE_TIMEOUT_SEC" \
         --connect-timeout 5 \
         --keepalive-time 30 \
         -w '%{http_code} %{time_total}\n' \
-        "$L7_TEST_URL" "$L7_TEST_URL" 2>/dev/null \
-        | tail -n 1 || true)"
+        "$L7_TEST_URL" "$L7_TEST_URL" 2>&1 \
+        | tail -n 1)" || curl_rc=$?
 
     local code="" time_total=""
     read -r code time_total <<<"$curl_out"
+
+    dlog "listing=$listing_id curl_rc=$curl_rc http_code=${code:-?} time_total=${time_total:-?} raw='$curl_out'"
 
     if [[ "$code" == "204" || "$code" == "200" ]]; then
         # bash arithmetic doesn't do floats; use awk to round.
         rtt_ms="$(awk -v t="$time_total" 'BEGIN { printf "%d", t * 1000 + 0.5 }')"
         ok="true"
+    else
+        log "listing=$listing_id probe FAILED curl_rc=$curl_rc http=${code:-none} (boot_ok=$boot_ok)"
+        if [[ -s "$xray_log" ]]; then
+            log "  xray stderr tail:"
+            tail -n 10 "$xray_log" | sed 's/^/    /' >&2 2>/dev/null || true
+        fi
     fi
 
     cleanup
