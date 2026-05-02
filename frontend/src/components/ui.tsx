@@ -174,18 +174,16 @@ export function Modal({
       }}
     >
       <div className="modal" role="dialog" aria-modal="true">
-        <div className="modal-header">
-          <button
-            type="button"
-            className="modal-close"
-            aria-label="بستن"
-            onClick={onClose}
-          >
-            ×
-          </button>
-          {title && <h3>{title}</h3>}
-        </div>
-        <div className="modal-body">{children}</div>
+        <button
+          type="button"
+          className="modal-close"
+          aria-label="بستن"
+          onClick={onClose}
+        >
+          ×
+        </button>
+        {title && <h3>{title}</h3>}
+        {children}
       </div>
     </div>
   );
