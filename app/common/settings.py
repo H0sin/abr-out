@@ -61,9 +61,9 @@ class Settings(BaseSettings):
     # Listing quality gate. Sellers' new listings start in ``pending`` and
     # are promoted to ``active`` on the first ok=true PingSample. If no
     # successful ping arrives within this many minutes the listing is
-    # hard-deleted (panel inbound + DB row). Tune up if Iran-side prober
-    # interval is slow.
-    listing_quality_gate_minutes: int = 5
+    # marked ``broken`` (panel inbound is kept; seller can hit "retry").
+    # Tuned generously because the Iran link is often flaky on first try.
+    listing_quality_gate_minutes: int = 15
 
     # Dynamic health gate for established listings. After an ``active``
     # listing has gone this many minutes without a single ok=true ping
@@ -71,10 +71,12 @@ class Settings(BaseSettings):
     # marketplace but the Iran prober still re-tests it (throttled by
     # ``listing_broken_probe_minutes`` so we don't hammer dead hosts).
     # Recovery requires ``listing_recovery_consecutive_ok`` successful
-    # samples in a row.
-    listing_broken_after_minutes: int = 10
-    listing_broken_probe_minutes: int = 10
-    listing_recovery_consecutive_ok: int = 2
+    # samples in a row. Defaults are deliberately lenient — Iranian
+    # filtering causes lots of transient failures and we don't want to
+    # empty the marketplace on every blip.
+    listing_broken_after_minutes: int = 30
+    listing_broken_probe_minutes: int = 5
+    listing_recovery_consecutive_ok: int = 1
 
     # Payments
     nowpayments_api_key: str = ""

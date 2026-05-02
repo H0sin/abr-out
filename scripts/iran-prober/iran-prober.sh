@@ -25,6 +25,8 @@
 # Optional env (with defaults):
 #   PROBE_INTERVAL_SEC    60     seconds between cycles
 #   PROBE_TIMEOUT_SEC     10     per-URL curl timeout (matches 3x-ui's 10s)
+#   PROBE_RETRIES         3      attempts per listing (flaky Iran link)
+#   PROBE_RETRY_SLEEP_SEC 2      backoff between probe attempts
 #   XRAY_BIN              xray   path to the xray-core binary
 #   XRAY_LOCAL_PORT       10808  loopback SOCKS port reused across probes
 #   XRAY_BOOT_WAIT_MS     3000   wait for xray to start listening (3x-ui uses 3s)
@@ -47,6 +49,8 @@ API_BASE="${API_BASE:-}"
 API_INTERNAL_TOKEN="${API_INTERNAL_TOKEN:-}"
 PROBE_INTERVAL_SEC="${PROBE_INTERVAL_SEC:-60}"
 PROBE_TIMEOUT_SEC="${PROBE_TIMEOUT_SEC:-10}"
+PROBE_RETRIES="${PROBE_RETRIES:-3}"
+PROBE_RETRY_SLEEP_SEC="${PROBE_RETRY_SLEEP_SEC:-2}"
 XRAY_BIN="${XRAY_BIN:-xray}"
 XRAY_LOCAL_PORT="${XRAY_LOCAL_PORT:-10808}"
 XRAY_BOOT_WAIT_MS="${XRAY_BOOT_WAIT_MS:-3000}"
@@ -102,6 +106,48 @@ if ! command -v "$XRAY_BIN" >/dev/null 2>&1; then
 fi
 
 mkdir -p "$TMP_DIR"
+
+# --- API helper with retries ----------------------------------------------
+#
+# The Iran <-> bot link is occasionally lossy (filtering, NAT resets,
+# transient TLS errors). One blip shouldn't drop a whole probe cycle, so
+# every API call gets up to ${API_RETRIES:-3} attempts with a small
+# backoff. Echoes the raw HTTP body on stdout and the final HTTP status
+# code on stderr-prefixed via dlog. Returns 0 on 2xx, 1 otherwise.
+API_RETRIES="${API_RETRIES:-3}"
+API_RETRY_SLEEP_SEC="${API_RETRY_SLEEP_SEC:-2}"
+
+api_curl() {
+    local method="$1"; shift
+    local path="$1"; shift
+    # Remaining args are forwarded to curl (e.g. -d @-).
+    local attempt=1 code="" body=""
+    local tmp
+    tmp="$(mktemp)"
+    while (( attempt <= API_RETRIES )); do
+        code="$(curl -sS -o "$tmp" -w '%{http_code}' --max-time 15 \
+            "${API_CURL_FLAGS[@]}" \
+            -X "$method" \
+            -H "X-Internal-Token: $API_INTERNAL_TOKEN" \
+            "$@" \
+            "$API_BASE$path" 2>/dev/null || echo "000")"
+        if [[ "$code" =~ ^2[0-9][0-9]$ ]]; then
+            cat "$tmp"
+            rm -f "$tmp"
+            dlog "api $method $path -> $code (attempt $attempt)"
+            return 0
+        fi
+        log "api $method $path attempt $attempt/$API_RETRIES failed (http=$code)"
+        attempt=$((attempt + 1))
+        if (( attempt <= API_RETRIES )); then
+            sleep "$API_RETRY_SLEEP_SEC"
+        fi
+    done
+    body="$(cat "$tmp" 2>/dev/null || true)"
+    rm -f "$tmp"
+    log "api $method $path GAVE UP after $API_RETRIES tries; last body=${body:0:200}"
+    return 1
+}
 
 # --- xray config generator -------------------------------------------------
 #
@@ -235,27 +281,48 @@ probe_one() {
     # discard the first. Without this trick every request rebuilds
     # the entire tunnel, inflating the reported RTT 4-7x relative to
     # what the 3x-ui "lightning" button shows.
-    local curl_rc=0
-    curl_out="$(curl -sS --http1.1 -o /dev/null -o /dev/null \
-        --socks5-hostname "127.0.0.1:$XRAY_LOCAL_PORT" \
-        --max-time "$PROBE_TIMEOUT_SEC" \
-        --connect-timeout 5 \
-        --keepalive-time 30 \
-        -w '%{http_code} %{time_total}\n' \
-        "$L7_TEST_URL" "$L7_TEST_URL" 2>&1 \
-        | tail -n 1)" || curl_rc=$?
+    #
+    # The Iran <-> seller-host link is often unstable (filtering,
+    # CGNAT resets, transient TLS errors). One blip shouldn't drop a
+    # listing all the way to broken, so we retry up to PROBE_RETRIES
+    # times with a small backoff before giving up. The first
+    # successful attempt wins.
+    local curl_rc=0 attempt=1 code="" time_total=""
+    while (( attempt <= PROBE_RETRIES )); do
+        curl_rc=0
+        curl_out="$(curl -sS --http1.1 -o /dev/null -o /dev/null \
+            --socks5-hostname "127.0.0.1:$XRAY_LOCAL_PORT" \
+            --max-time "$PROBE_TIMEOUT_SEC" \
+            --connect-timeout 5 \
+            --keepalive-time 30 \
+            -w '%{http_code} %{time_total}\n' \
+            "$L7_TEST_URL" "$L7_TEST_URL" 2>&1 \
+            | tail -n 1)" || curl_rc=$?
 
-    local code="" time_total=""
-    read -r code time_total <<<"$curl_out"
+        code="" time_total=""
+        read -r code time_total <<<"$curl_out"
 
-    dlog "listing=$listing_id curl_rc=$curl_rc http_code=${code:-?} time_total=${time_total:-?} raw='$curl_out'"
+        dlog "listing=$listing_id attempt=$attempt/$PROBE_RETRIES curl_rc=$curl_rc http_code=${code:-?} time_total=${time_total:-?}"
 
-    if [[ "$code" == "204" || "$code" == "200" ]]; then
-        # bash arithmetic doesn't do floats; use awk to round.
-        rtt_ms="$(awk -v t="$time_total" 'BEGIN { printf "%d", t * 1000 + 0.5 }')"
-        ok="true"
-    else
-        log "listing=$listing_id probe FAILED curl_rc=$curl_rc http=${code:-none} (boot_ok=$boot_ok)"
+        if [[ "$code" == "204" || "$code" == "200" ]]; then
+            # bash arithmetic doesn't do floats; use awk to round.
+            rtt_ms="$(awk -v t="$time_total" 'BEGIN { printf "%d", t * 1000 + 0.5 }')"
+            ok="true"
+            if (( attempt > 1 )); then
+                log "listing=$listing_id ok on attempt $attempt rtt=${rtt_ms}ms"
+            fi
+            break
+        fi
+
+        log "listing=$listing_id attempt $attempt/$PROBE_RETRIES failed curl_rc=$curl_rc http=${code:-none}"
+        attempt=$((attempt + 1))
+        if (( attempt <= PROBE_RETRIES )); then
+            sleep "$PROBE_RETRY_SLEEP_SEC"
+        fi
+    done
+
+    if [[ "$ok" != "true" ]]; then
+        log "listing=$listing_id probe FAILED after $PROBE_RETRIES attempts (boot_ok=$boot_ok)"
         if [[ -s "$xray_log" ]]; then
             log "  xray stderr tail:"
             tail -n 10 "$xray_log" | sed 's/^/    /' >&2 2>/dev/null || true
@@ -281,9 +348,7 @@ probe_one() {
 # --- one cycle -------------------------------------------------------------
 cycle() {
     local listings_json
-    listings_json="$(curl -s --max-time 15 "${API_CURL_FLAGS[@]}" \
-        -H "X-Internal-Token: $API_INTERNAL_TOKEN" \
-        "$API_BASE/internal/prober/listings" || true)"
+    listings_json="$(api_curl GET /internal/prober/listings || true)"
 
     if [[ -z "$listings_json" ]] || ! jq -e 'type == "array"' \
         <<<"$listings_json" >/dev/null 2>&1; then
@@ -319,14 +384,13 @@ cycle() {
     local n
     n="$(jq 'length' <<<"$samples")"
     if [[ "$n" -gt 0 ]]; then
-        local resp
-        resp="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${API_CURL_FLAGS[@]}" \
-            -X POST \
-            -H "X-Internal-Token: $API_INTERNAL_TOKEN" \
+        if api_curl POST /internal/prober/samples \
             -H "Content-Type: application/json" \
-            -d "$samples" \
-            "$API_BASE/internal/prober/samples" || true)"
-        log "posted $n sample(s) -> http $resp"
+            --data-binary "$samples" >/dev/null; then
+            log "posted $n sample(s) ok"
+        else
+            log "posted $n sample(s) FAILED after retries"
+        fi
     fi
 }
 
