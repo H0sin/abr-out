@@ -1110,23 +1110,18 @@ select {
 .modal-overlay {
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, 0.55);
-  /* The overlay itself scrolls (not the modal), so on small phones the
-     whole modal content scrolls naturally with the page rather than
-     creating a tiny inner scroll area that confuses users. */
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
+  /* Block layout (NOT flex). On iOS/WebView, ``overflow: auto`` on a flex
+     container whose single child overflows vertically does not produce a
+     reliably scrollable area \u2014 the user can drag a millimeter and it
+     snaps back. Plain block + ``margin: 0 auto`` for the modal centers
+     horizontally and lets the overlay scroll naturally. */
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  /* ``none`` (not ``contain``) fully isolates this scroll container from
-     the body and from Telegram WebApp's swipe-to-close gesture, so the
-     overlay no longer rubber-bands back to the top when the user lets go. */
+  /* ``none`` fully isolates this scroll container from the body and from
+     Telegram WebApp's swipe-to-close gesture. */
   overscroll-behavior: none;
-  /* touch-action: pan-y keeps vertical scroll responsive while preventing
-     horizontal pans from being interpreted as a back/close gesture. */
   touch-action: pan-y;
   padding: 16px;
-  /* Respect mobile safe areas (Telegram WebApp / iOS notch). */
   padding-top: max(16px, env(safe-area-inset-top));
   padding-bottom: max(16px, env(safe-area-inset-bottom));
   z-index: 1000;
@@ -1138,11 +1133,7 @@ select {
   border-radius: 16px;
   width: 100%;
   max-width: 420px;
-  /* Modal grows with its content; the overlay scrolls when needed. No
-     internal scroll, no sticky/absolute action bar — buttons sit at the
-     natural bottom of the form and the user scrolls the page to reach
-     them, just like a normal mobile sheet. */
-  margin: auto;
+  margin: 0 auto;
   padding: 18px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
   animation: pop-in 0.18s ease-out;
