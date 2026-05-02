@@ -1110,7 +1110,15 @@ select {
 .modal-overlay {
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, 0.55);
-  display: flex; align-items: center; justify-content: center;
+  /* The overlay itself scrolls (not the modal), so on small phones the
+     whole modal content scrolls naturally with the page rather than
+     creating a tiny inner scroll area that confuses users. */
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   padding: 16px;
   /* Respect mobile safe areas (Telegram WebApp / iOS notch). */
   padding-top: max(16px, env(safe-area-inset-top));
@@ -1124,36 +1132,14 @@ select {
   border-radius: 16px;
   width: 100%;
   max-width: 420px;
-  /* dvh tracks the *visible* viewport on mobile, unlike vh which can be
-     hidden behind the browser chrome and cause overflow with no scroll. */
-  max-height: calc(100vh - 32px);
-  max-height: calc(100dvh - 32px);
-  /* Anchor for the absolutely-positioned action bar below. */
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  /* Modal grows with its content; the overlay scrolls when needed. No
+     internal scroll, no sticky/absolute action bar — buttons sit at the
+     natural bottom of the form and the user scrolls the page to reach
+     them, just like a normal mobile sheet. */
+  margin: auto;
+  padding: 18px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
   animation: pop-in 0.18s ease-out;
-}
-.modal-header {
-  padding: 18px 18px 0;
-  flex: 0 0 auto;
-}
-.modal-body {
-  padding: 0 18px;
-  /* Reserved space at the bottom so the absolutely-positioned action bar
-     never overlaps the last form field. Matches the bar's natural height
-     (button ~42px + 24px vertical padding). */
-  padding-bottom: 76px;
-  flex: 1 1 auto;
-  /* min-height: 0 is critical for overflow inside a flex column parent —
-     without it the body refuses to shrink below its content height and
-     scrolling silently stops working. */
-  min-height: 0;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
 }
 .modal h3 { margin: 0 0 12px; font-size: 17px; font-weight: 700; }
 .modal-close { float: left; background: transparent; border: 0; color: inherit;
@@ -1162,17 +1148,7 @@ select {
 .modal-actions {
   display: flex;
   gap: 8px;
-  /* Pinned to the modal's bottom edge — outside the scrolling body so the
-     buttons stay visible no matter how long the form is. */
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 12px 18px;
-  background: var(--bg-card, #fff);
-  border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08));
-  box-shadow: 0 -8px 12px -8px rgba(0, 0, 0, 0.18);
-  z-index: 1;
+  margin-top: 14px;
 }
 .modal-actions > * { flex: 1; }
 
