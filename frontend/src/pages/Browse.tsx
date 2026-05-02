@@ -190,7 +190,7 @@ function BuyModal({
   const [customExpiry, setCustomExpiry] = useState(false);
   const [customDays, setCustomDays] = useState("");
   const [gb, setGb] = useState<string>("");
-  const [autoDisable, setAutoDisable] = useState(false);
+  const [autoDisable, setAutoDisable] = useState(true);
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<Config | null>(null);
   const [copied, setCopied] = useState(false);
@@ -204,7 +204,7 @@ function BuyModal({
     setCustomExpiry(false);
     setCustomDays("");
     setGb("");
-    setAutoDisable(false);
+    setAutoDisable(true);
     setBusy(false);
     setCreated(null);
     setCopied(false);
@@ -399,22 +399,25 @@ function BuyModal({
             />
           </div>
 
-          <div className="field">
-            <label
-              className="row gap-2"
-              style={{ alignItems: "center", cursor: "pointer" }}
-            >
+          <label className={`toggle-card${autoDisable ? " is-on" : ""}`}>
+            <div className="toggle-card-text">
+              <div className="toggle-card-title">
+                غیرفعال‌سازی خودکار در صورت گرانی
+              </div>
+              <div className="toggle-card-hint">
+                اگر فروشنده قیمت هر گیگ را بالا برد، این کانفیگ به‌صورت خودکار
+                خاموش می‌شود تا از کسر ناخواسته از موجودی شما جلوگیری شود.
+              </div>
+            </div>
+            <span className="switch">
               <input
                 type="checkbox"
                 checked={autoDisable}
                 onChange={(e) => setAutoDisable(e.target.checked)}
               />
-              <span>
-                در صورت افزایش قیمت توسط فروشنده، این کانفیگ به‌صورت خودکار
-                غیرفعال شود.
-              </span>
-            </label>
-          </div>
+              <span className="switch-slider" />
+            </span>
+          </label>
 
           <div className="modal-actions">
             <button className="btn" onClick={onClose} disabled={busy}>

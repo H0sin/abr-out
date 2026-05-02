@@ -309,16 +309,29 @@ function ConfigActions({
         </button>
       </div>
       <label
-        className="row gap-2 mt-2 muted"
-        style={{ alignItems: "center", fontSize: 13, cursor: "pointer" }}
+        className={`toggle-card${
+          config.auto_disable_on_price_increase ? " is-on" : ""
+        }`}
+        style={{ marginTop: 12 }}
       >
-        <input
-          type="checkbox"
-          checked={config.auto_disable_on_price_increase}
-          onChange={(e) => toggleFlag(e.target.checked)}
-          disabled={!!busy}
-        />
-        <span>در صورت افزایش قیمت توسط فروشنده، خودکار غیرفعال شود</span>
+        <div className="toggle-card-text">
+          <div className="toggle-card-title">
+            غیرفعال‌سازی خودکار در صورت گرانی
+          </div>
+          <div className="toggle-card-hint">
+            اگر فروشنده قیمت هر گیگ را بالا برد، این کانفیگ به‌صورت خودکار
+            خاموش می‌شود.
+          </div>
+        </div>
+        <span className="switch">
+          <input
+            type="checkbox"
+            checked={config.auto_disable_on_price_increase}
+            onChange={(e) => toggleFlag(e.target.checked)}
+            disabled={!!busy}
+          />
+          <span className="switch-slider" />
+        </span>
       </label>
     </>
   );

@@ -17,10 +17,12 @@ from app.bot.keyboards import (
     CB_WALLET_HUB,
     admin_user_panel,
     hide_reply_keyboard,
+    join_channel_kb,
     main_menu_inline,
     support_reply_kb,
     wallet_hub_inline,
 )
+from app.bot.middlewares import is_channel_member
 from app.common.db.models import SupportDirection, SupportMessage, User
 from app.common.db.session import SessionLocal
 from app.common.logging import logger
@@ -93,18 +95,38 @@ async def cmd_start(
         await message.answer("🚫 حساب شما مسدود است.")
         return
 
+    # Notify admins about brand-new users *before* the channel gate, so
+    # users who never join still show up in admin alerts.
+    if is_first_start:
+        await _notify_admins_new_user(user)
+
     # Clear any legacy persistent reply keyboard from older bot versions.
     await message.answer(
         "سلام! به مارکت‌پلیس اوت\u200cباند خوش اومدی.",
         reply_markup=hide_reply_keyboard(),
     )
 
+    # Channel gate: MembershipMiddleware lets /start through, so we enforce
+    # the gate here ourselves. Admins always pass.
+    settings = get_settings()
+    channel = settings.required_channel.strip()
+    if (
+        channel
+        and tg.id not in settings.admin_ids
+        and not await is_channel_member(message.bot, channel, tg.id)
+    ):
+        url = settings.effective_required_channel_url
+        await message.answer(
+            "🔒 برای استفاده از ربات ابتدا در کانال ما عضو شوید.",
+            reply_markup=join_channel_kb(url).model_dump(exclude_none=True),
+        )
+        return
+
     payload = (command.args or "").strip().lower()
     if payload == "topup":
         # Deep-link from miniapp: jump straight into the top-up FSM.
         from app.bot.handlers.topup import TopUpStates
 
-        settings = get_settings()
         await state.set_state(TopUpStates.waiting_amount)
         await message.answer(
             f"💵 مبلغ دلاری که می‌خواهید به کیف پول اضافه شود را وارد کنید:\n"
@@ -116,9 +138,6 @@ async def cmd_start(
             "از منوی زیر یکی را انتخاب کن:",
             reply_markup=main_menu_inline(),
         )
-
-    if is_first_start:
-        await _notify_admins_new_user(user)
 
 
 async def _notify_admins_new_user(user: User | None) -> None:
@@ -171,6 +190,22 @@ async def on_membership_check(cb: CallbackQuery, bot: Bot, state: FSMContext) ->
     if not is_member:
         await cb.answer("هنوز عضو کانال نیستید.", show_alert=True)
         return
+
+    # Defensive first-start notification: covers users who originally
+    # arrived via the miniapp (deps.py creates the User row without
+    # setting ``started_at``) and only now interacted via the bot, as
+    # well as any future paths that bypass cmd_start.
+    is_first_start = False
+    new_user: User | None = None
+    async with SessionLocal() as session:
+        new_user = await session.get(User, cb.from_user.id)
+        if new_user is not None and new_user.started_at is None:
+            new_user.started_at = datetime.now(timezone.utc)
+            await session.commit()
+            is_first_start = True
+    if is_first_start:
+        await _notify_admins_new_user(new_user)
+
     await state.clear()
     await cb.message.answer(
         "✅ عضویت شما تایید شد.\nاز منوی زیر یکی را انتخاب کن:",

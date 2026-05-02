@@ -42,3 +42,21 @@
 		respond "Not Found" 404
 	}
 }
+
+# Plain-HTTP listener for the Iran-side prober.
+# The Iran VPS reaches us through a private tunnel (which is itself
+# encrypted), so adding TLS here only causes SNI / cert headaches when
+# connecting by raw IP. We bind to :8081 instead of :80 because Caddy
+# auto-creates an HTTP->HTTPS redirect for :80, which would 308-redirect
+# the prober's POST and break it. Auth is the X-Internal-Token header
+# (validated by FastAPI).
+:8081 {
+	@prober path /internal/prober/*
+	handle @prober {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		respond "Not Found" 404
+	}
+}

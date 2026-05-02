@@ -61,6 +61,26 @@ class BlockMiddleware(BaseMiddleware):
 _MEMBER_OK = {"member", "administrator", "creator"}
 
 
+_MEMBER_OK = {"member", "administrator", "creator"}
+
+
+async def is_channel_member(bot: Bot | None, channel: str, user_id: int) -> bool:
+    """True if the user is a member of ``channel``. False on any error."""
+    if bot is None or not channel:
+        return False
+    try:
+        cm = await bot.get_chat_member(channel, user_id)
+        return getattr(cm, "status", None) in _MEMBER_OK
+    except Exception as exc:
+        logger.warning(
+            "get_chat_member failed for channel={} user={}: {}",
+            channel,
+            user_id,
+            exc,
+        )
+        return False
+
+
 class MembershipMiddleware(BaseMiddleware):
     """Force users to join the configured Telegram channel before interacting.
 
@@ -90,6 +110,14 @@ class MembershipMiddleware(BaseMiddleware):
         # Always allow the re-check callback through so the handler can run.
         if isinstance(event, CallbackQuery) and (event.data or "") == CB_MSHIP_CHECK:
             return await handler(event, data)
+
+        # Always allow /start through: cmd_start handles the upsert + admin
+        # notification + channel-gate UI itself, so users who never joined
+        # the channel still get a User row + their first-start notification.
+        if isinstance(event, Message):
+            text = (event.text or "").strip()
+            if text.startswith("/start"):
+                return await handler(event, data)
 
         bot: Bot | None = data.get("bot")
         is_member = False

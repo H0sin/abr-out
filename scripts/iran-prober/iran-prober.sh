@@ -30,6 +30,9 @@
 #   XRAY_LOCAL_PORT       10808  loopback SOCKS port reused across probes
 #   XRAY_BOOT_WAIT_MS     400    wait for xray to start listening
 #   L7_TEST_URL           https://www.google.com/generate_204
+#   API_INSECURE          0      set 1 to add `curl -k` (self-signed cert,
+#                                e.g. when API_BASE is a raw IP behind
+#                                Caddy's `tls internal`)
 #
 # Exit codes:
 #   0  loop exited cleanly (only on SIGTERM)
@@ -50,6 +53,13 @@ XRAY_BIN="${XRAY_BIN:-xray}"
 XRAY_LOCAL_PORT="${XRAY_LOCAL_PORT:-10808}"
 XRAY_BOOT_WAIT_MS="${XRAY_BOOT_WAIT_MS:-400}"
 L7_TEST_URL="${L7_TEST_URL:-https://www.google.com/generate_204}"
+# Set API_INSECURE=1 if API_BASE points at a self-signed endpoint
+# (e.g. raw IP behind Caddy's `tls internal`). Adds curl -k.
+API_INSECURE="${API_INSECURE:-0}"
+API_CURL_FLAGS=()
+if [[ "$API_INSECURE" == "1" ]]; then
+    API_CURL_FLAGS+=(-k)
+fi
 
 log() {
     printf '%s [iran-prober] %s\n' "$(date -u +%FT%TZ)" "$*" >&2
@@ -178,7 +188,7 @@ probe_one() {
     # Wait for the loopback SOCKS port to start accepting connections.
     local waited=0
     while ! curl -s --connect-timeout 1 -o /dev/null \
-        --socks5h "127.0.0.1:$XRAY_LOCAL_PORT" \
+        --socks5-hostname "127.0.0.1:$XRAY_LOCAL_PORT" \
         --max-time 1 "https://www.google.com/generate_204" >/dev/null 2>&1; do
         waited=$((waited + 100))
         if [[ "$waited" -ge "$XRAY_BOOT_WAIT_MS" ]]; then
@@ -189,13 +199,13 @@ probe_one() {
 
     # Warmup request (tunnel + DNS + TLS handshake) — discard result.
     curl -s -o /dev/null \
-        --socks5h "127.0.0.1:$XRAY_LOCAL_PORT" \
+        --socks5-hostname "127.0.0.1:$XRAY_LOCAL_PORT" \
         --max-time "$PROBE_WARMUP_SEC" \
         "$L7_TEST_URL" >/dev/null 2>&1 || true
 
     # Measured request: capture http_code + time_total in one call.
     curl_out="$(curl -s -o /dev/null \
-        --socks5h "127.0.0.1:$XRAY_LOCAL_PORT" \
+        --socks5-hostname "127.0.0.1:$XRAY_LOCAL_PORT" \
         --max-time "$PROBE_TIMEOUT_SEC" \
         -w '%{http_code} %{time_total}' \
         "$L7_TEST_URL" 2>/dev/null || true)"
@@ -228,7 +238,7 @@ probe_one() {
 # --- one cycle -------------------------------------------------------------
 cycle() {
     local listings_json
-    listings_json="$(curl -s --max-time 15 \
+    listings_json="$(curl -s --max-time 15 "${API_CURL_FLAGS[@]}" \
         -H "X-Internal-Token: $API_INTERNAL_TOKEN" \
         "$API_BASE/internal/prober/listings" || true)"
 
@@ -267,7 +277,7 @@ cycle() {
     n="$(jq 'length' <<<"$samples")"
     if [[ "$n" -gt 0 ]]; then
         local resp
-        resp="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+        resp="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${API_CURL_FLAGS[@]}" \
             -X POST \
             -H "X-Internal-Token: $API_INTERNAL_TOKEN" \
             -H "Content-Type: application/json" \
