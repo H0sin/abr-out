@@ -162,7 +162,59 @@ export function Modal({
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+
+    // Lock the page behind the modal so the browser/Telegram WebApp doesn't
+    // fight the overlay's own scroll (which causes the "scroll then snap
+    // back" bounce on mobile). We restore the previous scroll position on
+    // close.
+    const scrollY = window.scrollY;
+    const prev = {
+      position: document.body.style.position,
+      top: document.body.style.top,
+      left: document.body.style.left,
+      right: document.body.style.right,
+      width: document.body.style.width,
+      overflow: document.body.style.overflow,
+    };
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.left = "0";
+    document.body.style.right = "0";
+    document.body.style.width = "100%";
+    document.body.style.overflow = "hidden";
+
+    // Telegram WebApp: disable the swipe-down-to-close gesture while the
+    // modal is open, otherwise dragging the overlay scroll triggers a
+    // close-attempt and the content snaps back up.
+    const tg = window.Telegram?.WebApp as
+      | {
+          disableVerticalSwipes?: () => void;
+          enableVerticalSwipes?: () => void;
+          expand?: () => void;
+        }
+      | undefined;
+    try {
+      tg?.expand?.();
+      tg?.disableVerticalSwipes?.();
+    } catch {
+      /* older WebApp versions don't expose these helpers */
+    }
+
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.position = prev.position;
+      document.body.style.top = prev.top;
+      document.body.style.left = prev.left;
+      document.body.style.right = prev.right;
+      document.body.style.width = prev.width;
+      document.body.style.overflow = prev.overflow;
+      window.scrollTo(0, scrollY);
+      try {
+        tg?.enableVerticalSwipes?.();
+      } catch {
+        /* noop */
+      }
+    };
   }, [open, onClose]);
 
   if (!open) return null;

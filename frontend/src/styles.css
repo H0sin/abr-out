@@ -1118,7 +1118,13 @@ select {
   align-items: flex-start;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
+  /* ``none`` (not ``contain``) fully isolates this scroll container from
+     the body and from Telegram WebApp's swipe-to-close gesture, so the
+     overlay no longer rubber-bands back to the top when the user lets go. */
+  overscroll-behavior: none;
+  /* touch-action: pan-y keeps vertical scroll responsive while preventing
+     horizontal pans from being interpreted as a back/close gesture. */
+  touch-action: pan-y;
   padding: 16px;
   /* Respect mobile safe areas (Telegram WebApp / iOS notch). */
   padding-top: max(16px, env(safe-area-inset-top));
