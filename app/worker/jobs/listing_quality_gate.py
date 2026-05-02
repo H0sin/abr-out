@@ -69,20 +69,18 @@ async def listing_quality_gate_once() -> None:
             last_ok = listing.last_ok_ping_at
             if last_ok is not None and last_ok >= demote_cutoff:
                 continue
-            # Don't demote a fresh active listing whose first probes
-            # haven't arrived yet. Require evidence that the prober is
-            # actually running against this row.
-            seen_any = (
-                await session.execute(
-                    select(
-                        exists().where(
-                            PingSample.listing_id == listing.id,
-                            PingSample.sampled_at >= listing.created_at,
-                        )
-                    )
-                )
-            ).scalar()
-            if not seen_any:
+            # Don't demote without recent evidence that the prober is
+            # actually reaching this row. Using ``last_probed_at`` (the
+            # cache populated on every sample arrival) guards against
+            # two failure modes:
+            #   1. A brand-new active listing whose first probes haven't
+            #      landed yet — both timestamps are NULL.
+            #   2. A schema/cache invariant breaking (e.g. a fresh
+            #      column added before backfill, like 0009 did) — we
+            #      refuse to demote until an actual sample has arrived
+            #      after the cache was populated.
+            last_probed = listing.last_probed_at
+            if last_probed is None or last_probed < demote_cutoff:
                 continue
             await session.execute(
                 update(Listing)

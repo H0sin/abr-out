@@ -7,6 +7,7 @@ from typing import Any
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import CallbackQuery, Message, TelegramObject
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.bot.keyboards import CB_MSHIP_CHECK, join_channel_kb
 from app.common.db.models import User
@@ -15,13 +16,35 @@ from app.common.logging import logger
 from app.common.settings import get_settings
 
 
-async def _user_block_status(user_id: int) -> bool:
+async def _ensure_user_and_block_status(
+    user_id: int, username: str | None
+) -> bool:
+    """Idempotently upsert the ``users`` row and return its ``is_blocked``.
+
+    Every bot interaction (callback, message, inline-button) goes through
+    ``BlockMiddleware`` first, so doing the upsert here removes the
+    "user opens a deep-link without /start, then triggers a handler that
+    writes a user-scoped row" failure mode (FK violation on
+    ``payment_intents``, ``configs``, ``listings``, etc.).
+
+    The upsert refreshes ``username`` when it changes but leaves
+    ``started_at`` untouched — that flag is owned by the ``/start``
+    handler and is what gates the "first-start" admin notification.
+    """
     async with SessionLocal() as session:
+        await session.execute(
+            pg_insert(User)
+            .values(telegram_id=user_id, username=username)
+            .on_conflict_do_update(
+                index_elements=["telegram_id"],
+                set_={"username": username},
+            )
+        )
         row = await session.execute(
             select(User.is_blocked).where(User.telegram_id == user_id)
         )
-        v = row.scalar_one_or_none()
-    return bool(v)
+        await session.commit()
+    return bool(row.scalar_one_or_none())
 
 
 class BlockMiddleware(BaseMiddleware):
@@ -37,11 +60,15 @@ class BlockMiddleware(BaseMiddleware):
         if from_user is None:
             return await handler(event, data)
 
-        # Admins are never blocked.
+        # Admins are never blocked, but we still want a row in ``users``
+        # for them so admin-side queries (transactions, bookkeeping) work.
+        is_blocked = await _ensure_user_and_block_status(
+            from_user.id, from_user.username
+        )
         if from_user.id in get_settings().admin_ids:
             return await handler(event, data)
 
-        if not await _user_block_status(from_user.id):
+        if not is_blocked:
             return await handler(event, data)
 
         # Blocked: respond and stop propagation.
