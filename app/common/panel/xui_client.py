@@ -213,7 +213,7 @@ class XuiClient:
             "protocol": "vless",
             "settings": json.dumps(settings_obj),
             "streamSettings": json.dumps(stream_settings),
-            "sniffing": json.dumps({"enabled": True, "destOverride": ["http", "tls"]}),
+            "sniffing": json.dumps({"enabled": False, "destOverride": ["http", "tls"]}),
         }
         body = await self._request("POST", "/panel/api/inbounds/add", json=payload)
         return body.get("obj") or {}
