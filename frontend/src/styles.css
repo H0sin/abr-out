@@ -581,7 +581,8 @@ select {
   border-color: transparent;
 }
 
-.badge-pending {
+.badge-pending,
+.badge-broken {
   background: var(--warning-bg);
   color: var(--warning);
   border-color: transparent;

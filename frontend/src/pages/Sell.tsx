@@ -351,6 +351,16 @@ export function Sell() {
             </div>
             <StatusBadge status={l.status} />
           </div>
+          {l.status === "broken" && (
+            <div
+              className="muted mt-2"
+              style={{ fontSize: 12, lineHeight: 1.7 }}
+            >
+              اوت‌باند موقتاً ناپایدار است و از مارکت پنهان شده. هر ۱۰
+              دقیقه به‌صورت خودکار دوباره بررسی می‌شود؛ پس از دو پینگ
+              موفق پیاپی به‌طور خودکار به فهرست خرید بازمی‌گردد.
+            </div>
+          )}
           <div className="muted mt-2">
             فروش: <span className="num">{l.sales_count}</span>
           </div>
@@ -405,8 +415,14 @@ function ListingActions({
 }) {
   const [busy, setBusy] = useState<"" | "toggle" | "delete">("");
   const toast = useToast();
-  const isActive = listing.status === "active";
+  // ``broken`` is a worker-managed transient state — for the seller's
+  // purposes it behaves like ``active`` (re-disable hides it from the
+  // marketplace permanently until they re-enable). ``pending`` shows no
+  // toggle since the quality gate owns that transition.
+  const canDisable =
+    listing.status === "active" || listing.status === "broken";
   const isDeleted = listing.status === "deleted";
+  const isPending = listing.status === "pending";
 
   if (isDeleted) return null;
 
@@ -414,10 +430,10 @@ function ListingActions({
     if (busy) return;
     setBusy("toggle");
     try {
-      if (isActive) await api.disableListing(listing.id);
+      if (canDisable) await api.disableListing(listing.id);
       else await api.enableListing(listing.id);
       haptic.success();
-      toast.success(isActive ? "اوت‌باند غیرفعال شد" : "اوت‌باند فعال شد");
+      toast.success(canDisable ? "اوت‌باند غیرفعال شد" : "اوت‌باند فعال شد");
       onChanged();
     } catch (e) {
       haptic.error();
@@ -463,9 +479,14 @@ function ListingActions({
         className="btn btn-secondary"
         style={{ flex: 1 }}
         onClick={toggle}
-        disabled={!!busy}
+        disabled={!!busy || isPending}
+        title={isPending ? "در حال بررسی کیفیت" : undefined}
       >
-        {busy === "toggle" ? "..." : isActive ? "غیرفعال‌سازی" : "فعال‌سازی"}
+        {busy === "toggle"
+          ? "..."
+          : canDisable
+            ? "غیرفعال‌سازی"
+            : "فعال‌سازی"}
       </button>
       <button
         className="btn btn-danger"

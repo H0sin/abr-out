@@ -65,6 +65,17 @@ class Settings(BaseSettings):
     # interval is slow.
     listing_quality_gate_minutes: int = 5
 
+    # Dynamic health gate for established listings. After an ``active``
+    # listing has gone this many minutes without a single ok=true ping
+    # sample, the worker demotes it to ``broken``: it disappears from the
+    # marketplace but the Iran prober still re-tests it (throttled by
+    # ``listing_broken_probe_minutes`` so we don't hammer dead hosts).
+    # Recovery requires ``listing_recovery_consecutive_ok`` successful
+    # samples in a row.
+    listing_broken_after_minutes: int = 10
+    listing_broken_probe_minutes: int = 10
+    listing_recovery_consecutive_ok: int = 2
+
     # Payments
     nowpayments_api_key: str = ""
     nowpayments_ipn_secret: str = ""

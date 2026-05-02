@@ -52,6 +52,7 @@ export function EmptyState({
 const STATUS_FA: Record<string, string> = {
   active: "فعال",
   pending: "در انتظار تأیید",
+  broken: "موقتاً ناپایدار",
   rejected: "رد شده",
   disabled: "غیرفعال",
   expired: "منقضی",

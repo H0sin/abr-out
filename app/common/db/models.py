@@ -38,6 +38,11 @@ class UserRole(str, enum.Enum):
 class ListingStatus(str, enum.Enum):
     pending = "pending"
     active = "active"
+    # Listing was active but stopped responding to probes. Hidden from the
+    # marketplace; the prober still re-tests it on a slower cadence and
+    # ``listing_quality_gate`` flips it back to ``active`` after a sustained
+    # recovery (see ``Listing.broken_since`` / ``last_ok_ping_at``).
+    broken = "broken"
     disabled = "disabled"
     deleted = "deleted"
 
@@ -190,6 +195,23 @@ class Listing(Base):
     # ``active`` on the first successful ping; if no ok=true sample arrives by
     # this timestamp the listing is hard-deleted by ``listing_quality_gate``.
     pending_until_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Last time any PingSample was recorded (ok or not). Updated by the
+    # ``/internal/prober/samples`` ingestion path and consumed by the
+    # prober target endpoint to throttle re-probes of ``broken`` listings.
+    last_probed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Last time an ok=true PingSample was seen. Drives the active->broken
+    # demotion in ``listing_quality_gate``.
+    last_ok_ping_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # When the listing was demoted to ``broken``; ``None`` for any other
+    # status. Used as the lower bound when counting consecutive ok samples
+    # for recovery.
+    broken_since: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     sales_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
