@@ -78,6 +78,14 @@ class Settings(BaseSettings):
     listing_broken_probe_minutes: int = 5
     listing_recovery_consecutive_ok: int = 1
 
+    # Minimum 24h stability (percent of ok=true ping samples) required for
+    # an ``active`` listing to be visible in the buyer marketplace. Listings
+    # whose ``stability_pct`` is below this threshold are hidden from the
+    # browse feed (but still visible to their seller and still re-probed).
+    # ``None``/null stability (e.g. brand-new listings without enough
+    # samples yet) is always shown.
+    marketplace_min_stability_pct: int = 50
+
     # Payments
     nowpayments_api_key: str = ""
     nowpayments_ipn_secret: str = ""

@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.api.deps import current_user
 from app.common.db.models import (
@@ -113,11 +113,18 @@ async def list_active(
 ) -> list[ListingOut]:
     """Browse active listings (the marketplace feed)."""
     cutoff_24h = datetime.now(timezone.utc) - timedelta(hours=24)
+    min_stab = get_settings().marketplace_min_stability_pct
     async with SessionLocal() as session:
         result = await session.execute(
             select(Listing, User)
             .join(User, User.telegram_id == Listing.seller_user_id)
-            .where(Listing.status == ListingStatus.active)
+            .where(
+                Listing.status == ListingStatus.active,
+                or_(
+                    Listing.stability_pct.is_(None),
+                    Listing.stability_pct >= min_stab,
+                ),
+            )
             .order_by(Listing.price_per_gb_usd.asc())
         )
         rows = result.all()
