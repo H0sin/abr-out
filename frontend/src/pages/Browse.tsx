@@ -15,7 +15,12 @@ import { useToast } from "../lib/toast";
 import { useMe } from "../lib/MeContext";
 import { haptic, openTelegramLink } from "../lib/useTelegram";
 
-type SortKey = "price" | "ping" | "sales";
+type SortKey = "price" | "ping" | "sales" | "stability";
+
+// Listings dipping below this stability % are hidden from Browse so buyers
+// don't pick a flaky outbound. The check is dynamic: if a listing recovers
+// later, it reappears automatically on the next refetch.
+const MIN_STABILITY_PCT = 70;
 
 function fmtUsd(raw: string | number): string {
   const n = typeof raw === "number" ? raw : parseFloat(raw);
@@ -47,12 +52,18 @@ export function Browse() {
 
   const sorted = useMemo(() => {
     if (!listings) return null;
-    const xs = [...listings];
+    // Hide unstable outbounds. ``null`` means we have no samples yet — keep
+    // those visible so brand-new listings are not blocked from selling.
+    const xs = listings.filter(
+      (l) => l.stability_pct === null || l.stability_pct >= MIN_STABILITY_PCT,
+    );
     xs.sort((a, b) => {
       if (sort === "price")
         return parseFloat(a.price_per_gb_usd) - parseFloat(b.price_per_gb_usd);
       if (sort === "ping")
         return (a.avg_ping_ms ?? 9999) - (b.avg_ping_ms ?? 9999);
+      if (sort === "stability")
+        return (b.stability_pct ?? -1) - (a.stability_pct ?? -1);
       return b.sales_count - a.sales_count;
     });
     return xs;
@@ -82,6 +93,12 @@ export function Browse() {
         </SortChip>
         <SortChip active={sort === "ping"} onClick={() => setSort("ping")}>
           سریع‌ترین
+        </SortChip>
+        <SortChip
+          active={sort === "stability"}
+          onClick={() => setSort("stability")}
+        >
+          پایدارترین
         </SortChip>
         <SortChip active={sort === "sales"} onClick={() => setSort("sales")}>
           پرفروش‌ترین
