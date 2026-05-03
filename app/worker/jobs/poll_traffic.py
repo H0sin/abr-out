@@ -240,6 +240,9 @@ async def _bill_inbound(
                 )
             )
             if buyer_debit > 0:
+                # توضیح فارسی با قیمت نهایی و درصد کارمزد
+                final_price = listing.price_per_gb_usd * (Decimal("1") + commission_pct)
+                commission_percent = int(commission_pct * 100)
                 session.add(
                     WalletTransaction(
                         user_id=cfg.buyer_user_id,
@@ -247,8 +250,7 @@ async def _bill_inbound(
                         type=TxnType.usage_debit,
                         ref=f"config:{cfg.id}",
                         note=(
-                            f"usage {delta}B @ {listing.price_per_gb_usd}"
-                            f"/GB +{commission_pct}"
+                            f"بابت اوت {listing.title} با قیمت {final_price:.2f} دلار (قیمت فروشنده + کارمزد {commission_percent} درصد)"
                         ),
                         idempotency_key=f"poll:{cycle_id}:debit:{cfg.id}",
                     )

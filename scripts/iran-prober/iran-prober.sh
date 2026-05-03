@@ -51,6 +51,11 @@ PROBE_INTERVAL_SEC="${PROBE_INTERVAL_SEC:-60}"
 PROBE_TIMEOUT_SEC="${PROBE_TIMEOUT_SEC:-10}"
 PROBE_RETRIES="${PROBE_RETRIES:-3}"
 PROBE_RETRY_SLEEP_SEC="${PROBE_RETRY_SLEEP_SEC:-2}"
+# Number of probes to run in parallel each cycle. Each parallel slot
+# gets its own loopback SOCKS port (XRAY_LOCAL_PORT + slot_index) and
+# its own xray child. Tune down on tiny VPSes; 4 is fine on a 1 vCPU /
+# 1 GB box.
+PROBE_CONCURRENCY="${PROBE_CONCURRENCY:-4}"
 XRAY_BIN="${XRAY_BIN:-xray}"
 XRAY_LOCAL_PORT="${XRAY_LOCAL_PORT:-10808}"
 XRAY_BOOT_WAIT_MS="${XRAY_BOOT_WAIT_MS:-3000}"
@@ -158,12 +163,13 @@ write_xray_config() {
     local server_host="$2"
     local server_port="$3"
     local client_uuid="$4"
+    local local_port="$5"
 
     jq -n \
         --arg host "$server_host" \
         --argjson port "$server_port" \
         --arg uuid "$client_uuid" \
-        --argjson local_port "$XRAY_LOCAL_PORT" \
+        --argjson local_port "$local_port" \
         '{
             log: { loglevel: "warning", access: "none", error: "none" },
             inbounds: [{
@@ -218,6 +224,7 @@ probe_one() {
     local server_host="$2"
     local server_port="$3"
     local client_uuid="$4"
+    local local_port="${5:-$XRAY_LOCAL_PORT}"
 
     local now_iso
     now_iso="$(date -u +%FT%TZ)"
@@ -225,8 +232,8 @@ probe_one() {
     local xray_log="$TMP_DIR/probe-$listing_id.xray.log"
     local pid="" rtt_ms="null" ok="false" curl_out=""
 
-    write_xray_config "$cfg_path" "$server_host" "$server_port" "$client_uuid"
-    dlog "listing=$listing_id host=$server_host:$server_port cfg=$cfg_path"
+    write_xray_config "$cfg_path" "$server_host" "$server_port" "$client_uuid" "$local_port"
+    dlog "listing=$listing_id host=$server_host:$server_port port=$local_port cfg=$cfg_path"
 
     "$XRAY_BIN" run -c "$cfg_path" >"$xray_log" 2>&1 &
     pid=$!
@@ -249,7 +256,7 @@ probe_one() {
     local waited=0
     local boot_ok=0
     while ! curl -s --connect-timeout 1 -o /dev/null \
-        --socks5-hostname "127.0.0.1:$XRAY_LOCAL_PORT" \
+        --socks5-hostname "127.0.0.1:$local_port" \
         --max-time 1 "https://www.google.com/generate_204" >/dev/null 2>&1; do
         waited=$((waited + 100))
         if [[ "$waited" -ge "$XRAY_BOOT_WAIT_MS" ]]; then
@@ -266,7 +273,7 @@ probe_one() {
     else
         # Final probe to verify the SOCKS port responds; if not, log it.
         if curl -s --connect-timeout 1 -o /dev/null \
-            --socks5-hostname "127.0.0.1:$XRAY_LOCAL_PORT" \
+            --socks5-hostname "127.0.0.1:$local_port" \
             --max-time 1 "https://www.google.com/generate_204" >/dev/null 2>&1; then
             boot_ok=1
         fi
@@ -291,7 +298,7 @@ probe_one() {
     while (( attempt <= PROBE_RETRIES )); do
         curl_rc=0
         curl_out="$(curl -sS --http1.1 -o /dev/null -o /dev/null \
-            --socks5-hostname "127.0.0.1:$XRAY_LOCAL_PORT" \
+            --socks5-hostname "127.0.0.1:$local_port" \
             --max-time "$PROBE_TIMEOUT_SEC" \
             --connect-timeout 5 \
             --keepalive-time 30 \
@@ -358,9 +365,51 @@ cycle() {
 
     local count
     count="$(jq 'length' <<<"$listings_json")"
-    log "probing $count target(s)"
+    log "probing $count target(s) (concurrency=$PROBE_CONCURRENCY)"
 
-    local samples='[]'
+    if [[ "$count" -eq 0 ]]; then
+        return
+    fi
+
+    # Build an array of probe specs (one per target with a probe_uuid).
+    # We process them via a fixed-size worker pool so a 30-listing
+    # marketplace doesn't take 15 minutes serially. Each background
+    # worker gets a unique loopback SOCKS port (XRAY_LOCAL_PORT + slot)
+    # and writes its sample JSON to a per-listing temp file we collect
+    # at the end.
+    local results_dir="$TMP_DIR/results.$$"
+    rm -rf "$results_dir"
+    mkdir -p "$results_dir"
+
+    local pids=()
+    local slot_owner=()  # slot_owner[slot]=pid currently using that slot
+    local slot
+    for ((slot=0; slot<PROBE_CONCURRENCY; slot++)); do
+        slot_owner[slot]=""
+    done
+
+    _wait_any_slot() {
+        # Block until at least one slot frees up. Returns the freed slot
+        # index in the global var FREED_SLOT.
+        local s
+        while :; do
+            for ((s=0; s<PROBE_CONCURRENCY; s++)); do
+                local p="${slot_owner[s]}"
+                if [[ -z "$p" ]]; then
+                    FREED_SLOT="$s"
+                    return
+                fi
+                if ! kill -0 "$p" 2>/dev/null; then
+                    wait "$p" 2>/dev/null || true
+                    slot_owner[s]=""
+                    FREED_SLOT="$s"
+                    return
+                fi
+            done
+            sleep 0.2
+        done
+    }
+
     local i=0
     while [[ "$i" -lt "$count" ]]; do
         local row uuid host port lid
@@ -375,11 +424,43 @@ cycle() {
         port="$(jq -r '.port' <<<"$row")"
         lid="$(jq -r '.listing_id' <<<"$row")"
 
-        local sample
-        sample="$(probe_one "$lid" "$host" "$port" "$uuid")"
-        samples="$(jq -c ". + [$sample]" <<<"$samples")"
+        FREED_SLOT=""
+        _wait_any_slot
+        local slot_idx="$FREED_SLOT"
+        local slot_port=$((XRAY_LOCAL_PORT + slot_idx))
+        local out_file="$results_dir/$lid.json"
+
+        # Run probe_one in background; redirect its sample JSON to a
+        # per-listing file. probe_one's log lines still go to stderr so
+        # journalctl shows them interleaved with other workers.
+        ( probe_one "$lid" "$host" "$port" "$uuid" "$slot_port" >"$out_file" ) &
+        local bg_pid=$!
+        slot_owner[slot_idx]="$bg_pid"
+        pids+=("$bg_pid")
+
         i=$((i + 1))
     done
+
+    # Wait for the remaining workers.
+    local p
+    if [[ "${#pids[@]}" -gt 0 ]]; then
+        for p in "${pids[@]}"; do
+            wait "$p" 2>/dev/null || true
+        done
+    fi
+
+    # Collect samples.
+    local samples='[]'
+    local f
+    for f in "$results_dir"/*.json; do
+        [[ -f "$f" ]] || continue
+        if jq -e . "$f" >/dev/null 2>&1; then
+            samples="$(jq -c ". + [$(cat "$f")]" <<<"$samples")"
+        else
+            log "ignoring malformed sample file $f"
+        fi
+    done
+    rm -rf "$results_dir"
 
     local n
     n="$(jq 'length' <<<"$samples")"
