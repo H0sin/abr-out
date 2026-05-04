@@ -1130,7 +1130,7 @@ select {
   animation: fade-in 0.15s ease-out;
 }
 .modal {
-  background: var(--bg-card, #fff);
+  background: var(--surface-1);
   color: var(--text, inherit);
   border-radius: 16px;
   width: 100%;
