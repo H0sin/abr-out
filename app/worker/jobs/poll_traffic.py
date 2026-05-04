@@ -250,7 +250,7 @@ async def _bill_inbound(
                         type=TxnType.usage_debit,
                         ref=f"config:{cfg.id}",
                         note=(
-                            f"بابت اوت {listing.title} با قیمت {final_price:.2f} دلار (قیمت فروشنده + کارمزد {commission_percent} درصد)"
+                            f"بابت اوت {listing.title} با قیمت {final_price:.2f} دلار "
                         ),
                         idempotency_key=f"poll:{cycle_id}:debit:{cfg.id}",
                     )
