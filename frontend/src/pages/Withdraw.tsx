@@ -38,6 +38,13 @@ function statusClass(s: Withdrawal["status"]): string {
   return "status-stepper is-active";
 }
 
+function toInputAmountFloor(value: number, digits = 4): string {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  const factor = 10 ** digits;
+  const floored = Math.floor((value + Number.EPSILON) * factor) / factor;
+  return floored.toFixed(digits).replace(/(\.\d*?[1-9])0+$|\.0+$/, "$1");
+}
+
 async function pasteFromClipboard(): Promise<string | null> {
   try {
     if (navigator.clipboard && navigator.clipboard.readText) {
@@ -87,21 +94,27 @@ export function Withdraw() {
     };
   }, [amount, toast]);
 
-  const balance = useMemo(() => parseFloat(me?.balance_usd ?? "0") || 0, [me]);
+  const rawBalance = me?.balance_usd ?? "0";
+  const balance = useMemo(() => parseFloat(rawBalance) || 0, [rawBalance]);
   const amountNum = parseFloat(amount);
   const addrTrim = address.trim();
   const addrOk = ADDR_RE.test(addrTrim);
   const addrInvalid = address.length > 0 && !addrOk;
   const amountOk =
-    Number.isFinite(amountNum) && amountNum > 0 && amountNum <= balance;
+    Number.isFinite(amountNum) && amountNum > 0 && amountNum <= balance + 1e-9;
   const canSubmit =
     addrOk && amountOk && !!quote && parseFloat(quote.net_usdt) > 0 && !submitting;
 
   function setQuickPercent(pct: number) {
     haptic.light();
     if (balance <= 0) return;
-    const v = pct >= 1 ? balance : balance * pct;
-    setAmount(v.toFixed(4));
+    if (pct >= 1) {
+      // Keep exact backend-provided balance string to avoid rounding above balance.
+      setAmount(rawBalance);
+      return;
+    }
+    const v = Math.min(balance * pct, balance);
+    setAmount(toInputAmountFloor(v, 4));
   }
 
   async function onPasteAddress() {
