@@ -42,6 +42,21 @@ def _buyer_price(raw: Decimal, commission_mult: Decimal) -> Decimal:
 
     return (raw * commission_mult).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
 
+
+async def _load_total_gb_by_listing(session, listing_ids: list[int]) -> dict[int, float]:
+    if not listing_ids:
+        return {}
+
+    total_rows = await session.execute(
+        select(
+            OutboundUsage.listing_id,
+            func.coalesce(func.sum(OutboundUsage.gb), 0).label("total_gb"),
+        )
+        .where(OutboundUsage.listing_id.in_(listing_ids))
+        .group_by(OutboundUsage.listing_id)
+    )
+    return {int(listing_id): float(total_gb or 0) for listing_id, total_gb in total_rows.all()}
+
 # ASCII-only remark/title: latin letters, digits, space, dash, underscore, dot.
 # Persian/Arabic and other non-ASCII are rejected so that 3x-ui inbound remarks
 # (and downstream client emails) never contain RTL text or non-ASCII bytes.
@@ -128,18 +143,26 @@ async def list_active(
             .order_by(Listing.price_per_gb_usd.asc())
         )
         rows = result.all()
+        listing_ids = [l.id for (l, _u) in rows]
+        total_gb_by_listing = await _load_total_gb_by_listing(session, listing_ids)
         # Sum 24h GB per listing in a single query.
-        usage_24h_rows = await session.execute(
-            select(
-                OutboundUsage.listing_id,
-                func.coalesce(func.sum(OutboundUsage.gb), 0).label("gb24"),
+        if listing_ids:
+            usage_24h_rows = await session.execute(
+                select(
+                    OutboundUsage.listing_id,
+                    func.coalesce(func.sum(OutboundUsage.gb), 0).label("gb24"),
+                )
+                .where(
+                    OutboundUsage.listing_id.in_(listing_ids),
+                    OutboundUsage.sampled_at >= cutoff_24h,
+                )
+                .group_by(OutboundUsage.listing_id)
             )
-            .where(OutboundUsage.sampled_at >= cutoff_24h)
-            .group_by(OutboundUsage.listing_id)
-        )
-        gb_24h_by_listing: dict[int, float] = {
-            int(lid): float(gb24) for (lid, gb24) in usage_24h_rows.all()
-        }
+            gb_24h_by_listing: dict[int, float] = {
+                int(lid): float(gb24) for (lid, gb24) in usage_24h_rows.all()
+            }
+        else:
+            gb_24h_by_listing = {}
     commission_mult = Decimal("1") + get_settings().commission_pct
     # Hide seller-identifying fields (title/iran_host/port/seller_username)
     # so a buyer cannot match a listing back to the seller's Telegram or
@@ -152,7 +175,7 @@ async def list_active(
             avg_ping_ms=l.avg_ping_ms,
             sales_count=l.sales_count,
             status=l.status.value,
-            total_gb_sold=float(l.total_gb_sold or 0),
+            total_gb_sold=total_gb_by_listing.get(l.id, float(l.total_gb_sold or 0)),
             gb_sold_24h=gb_24h_by_listing.get(l.id, 0.0),
             stability_pct=l.stability_pct,
         )
@@ -175,6 +198,10 @@ async def list_my(
             .order_by(Listing.created_at.desc())
         )
         listings = result.scalars().all()
+        total_gb_by_listing = await _load_total_gb_by_listing(
+            session,
+            [l.id for l in listings],
+        )
     commission_mult = Decimal("1") + get_settings().commission_pct
     return [
         ListingOut(
@@ -188,7 +215,7 @@ async def list_my(
             sales_count=l.sales_count,
             seller_username=user.username,
             status=l.status.value,
-            total_gb_sold=float(l.total_gb_sold or 0),
+            total_gb_sold=total_gb_by_listing.get(l.id, float(l.total_gb_sold or 0)),
             gb_sold_24h=0.0,
             stability_pct=l.stability_pct,
         )

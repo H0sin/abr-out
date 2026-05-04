@@ -46,6 +46,7 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import func
 
 from app.common.db.models import (
     Config,
@@ -81,6 +82,36 @@ def _q_usd(x: Decimal) -> Decimal:
 
 def _q_gb(x: Decimal) -> Decimal:
     return x.quantize(Decimal("0.0000000001"))
+
+
+async def _refresh_listing_sales_totals(
+    session: AsyncSession,
+    listing_ids: list[int],
+) -> None:
+    if not listing_ids:
+        return
+
+    unique_listing_ids = list(dict.fromkeys(listing_ids))
+    total_rows = (
+        await session.execute(
+            select(
+                OutboundUsage.listing_id,
+                func.coalesce(func.sum(OutboundUsage.gb), ZERO).label("total_gb"),
+            )
+            .where(OutboundUsage.listing_id.in_(unique_listing_ids))
+            .group_by(OutboundUsage.listing_id)
+        )
+    ).all()
+    total_by_listing = {
+        int(listing_id): total_gb or ZERO for listing_id, total_gb in total_rows
+    }
+
+    for listing_id in unique_listing_ids:
+        await session.execute(
+            update(Listing)
+            .where(Listing.id == listing_id)
+            .values(total_gb_sold=total_by_listing.get(listing_id, ZERO))
+        )
 
 
 async def _bill_inbound(
@@ -470,16 +501,18 @@ async def poll_traffic_once() -> None:
     # the next cycle reads fresh totals (symmetric with the per-client flow).
     # On failure the anchors stay at the just-observed values (set inside
     # _bill_inbound) so the next cycle still diffs correctly.
-    if outbound_reset_ok:
+    if processed_ids:
         async with SessionLocal() as session:
-            await session.execute(
-                update(Listing)
-                .where(Listing.id.in_(processed_ids))
-                .values(
-                    last_outbound_up_bytes=0,
-                    last_outbound_down_bytes=0,
+            if outbound_reset_ok:
+                await session.execute(
+                    update(Listing)
+                    .where(Listing.id.in_(processed_ids))
+                    .values(
+                        last_outbound_up_bytes=0,
+                        last_outbound_down_bytes=0,
+                    )
                 )
-            )
+            await _refresh_listing_sales_totals(session, processed_ids)
             await session.commit()
 
     logger.info(
