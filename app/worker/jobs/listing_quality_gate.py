@@ -26,10 +26,9 @@ This job runs every 30s and performs three passes:
    recovers, and the prober still re-tests the host on a slower cadence
    (see `prober.list_targets`).
 
-3. **Recover pass.** ``broken`` -> ``active`` when the last
-   ``listing_recovery_consecutive_ok`` (default 2) PingSample rows since
-   ``broken_since`` are all ``ok=true``. ``broken_since`` is cleared and
-   the row reappears in the marketplace automatically.
+3. **Recover pass.** ``broken`` -> ``active`` on the first
+    ``ok=true`` PingSample recorded after ``broken_since``. ``broken_since``
+    is cleared and the row reappears in the marketplace automatically.
 """
 from __future__ import annotations
 
@@ -49,7 +48,9 @@ async def listing_quality_gate_once() -> None:
     demote_cutoff = now - timedelta(
         minutes=settings.listing_broken_after_minutes
     )
-    recovery_n = max(1, int(settings.listing_recovery_consecutive_ok))
+    # Product policy: a single successful probe is enough to recover from
+    # ``broken`` so the listing returns to the marketplace immediately.
+    recovery_n = 1
     async with SessionLocal() as session:
         rows = (
             await session.execute(
@@ -90,8 +91,8 @@ async def listing_quality_gate_once() -> None:
             )
             demoted.append(listing.id)
 
-        # 3) Recover pass: broken -> active after N consecutive ok=true
-        # samples since broken_since.
+        # 3) Recover pass: broken -> active after first ok=true sample
+        # since broken_since.
         broken_rows = (
             await session.execute(
                 select(Listing).where(Listing.status == ListingStatus.broken)
