@@ -5,7 +5,6 @@ import { ApiError, Config, Listing, api, topupDeepLink } from "../api";
 import {
   EmptyState,
   Modal,
-  PingCircle,
   SkeletonCard,
   StabilityPct,
 } from "../components/ui";
@@ -24,6 +23,18 @@ function fmtUsd(raw: string | number): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: 4,
   });
+}
+
+function fmtPing(ms: number | null | undefined): string {
+  if (ms == null) return "نامشخص";
+  return `${ms} ms`;
+}
+
+function pingPillClass(ms: number | null | undefined): string {
+  if (ms == null) return "stat-pill stat-pill-muted";
+  if (ms <= 170) return "stat-pill ping-good";
+  if (ms <= 400) return "stat-pill ping-mid";
+  return "stat-pill ping-bad";
 }
 
 const MIN_BALANCE = 0.5;
@@ -136,28 +147,28 @@ export function Browse() {
 
       {sorted?.map((l) => (
         <article key={l.id} className="card">
-          <div className="row" style={{ alignItems: "center", gap: 12 }}>
-            <PingCircle ms={l.avg_ping_ms} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div
-                className="title"
-                style={{
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                اوت‌باند <span className="num">#{l.id}</span>
-              </div>
-              <div
-                className="row gap-2 mt-2"
-                style={{ justifyContent: "flex-start", flexWrap: "wrap" }}
-              >
-                <StabilityPct pct={l.stability_pct} />
-                <span className="stat-pill" title="مجموع ترافیک فروخته‌شده">
-                  مجموع فروش <span className="num">{l.total_gb_sold.toFixed(1)}</span> GB
-                </span>
-              </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              className="title"
+              style={{
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              اوت‌باند <span className="num">#{l.id}</span>
+            </div>
+            <div
+              className="row gap-2 mt-2"
+              style={{ justifyContent: "flex-start", flexWrap: "wrap" }}
+            >
+              <StabilityPct pct={l.stability_pct} />
+              <span className={pingPillClass(l.avg_ping_ms)} title="میانگین پینگ">
+                پینگ: <span className="num">{fmtPing(l.avg_ping_ms)}</span>
+              </span>
+              <span className="stat-pill" title="مجموع ترافیک فروخته‌شده">
+                مجموع فروش <span className="num">{l.total_gb_sold.toFixed(1)}</span> GB
+              </span>
             </div>
           </div>
           <button
