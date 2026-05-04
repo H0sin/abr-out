@@ -288,6 +288,14 @@ class Config(Base):
     auto_disable_on_price_increase: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False
     )
+    # Set when the balance-enforcement worker auto-disables the config
+    # because the buyer's wallet balance dropped to zero or below. Cleared
+    # when the balance recovers and the config is auto-re-enabled. ``None``
+    # for configs disabled by the seller or by the buyer manually — those
+    # must never be auto-re-enabled.
+    auto_disabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
