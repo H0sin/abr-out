@@ -20,7 +20,7 @@ from app.common.db.models import (
 )
 from app.common.db.session import SessionLocal
 from app.common.logging import logger
-from app.common.notifications import notify_listing_buyers
+from app.common.notifications import notify_listing_buyers, notify_users
 from app.common.panel.xui_client import XuiClient, XuiError
 from app.common.settings import get_settings
 
@@ -606,12 +606,19 @@ async def patch_listing(
     increase) trigger an automatic disable + Telegram notification.
     """
     async with SessionLocal() as session:
+        settings = get_settings()
         listing = await _load_owned_listing(session, listing_id, user)
 
+        old_title = listing.title
         old_host = listing.iran_host
         old_price = Decimal(listing.price_per_gb_usd)
 
+        title_changed = body.title is not None and body.title != old_title
         host_changed = body.iran_host is not None and body.iran_host != old_host
+        price_changed = (
+            body.price_per_gb_usd is not None
+            and body.price_per_gb_usd != old_price
+        )
         price_increased = (
             body.price_per_gb_usd is not None
             and body.price_per_gb_usd > old_price
@@ -623,6 +630,18 @@ async def patch_listing(
             listing.price_per_gb_usd = body.price_per_gb_usd
         if host_changed:
             listing.iran_host = body.iran_host  # type: ignore[assignment]
+
+        # If a seller edits a non-sellable listing (broken/disabled), force a
+        # fresh quality-gate cycle so the tunnel is re-validated before re-sale.
+        edited = title_changed or host_changed or price_changed
+        if edited and listing.status in {ListingStatus.broken, ListingStatus.disabled}:
+            listing.status = ListingStatus.pending
+            listing.pending_until_at = datetime.now(timezone.utc) + timedelta(
+                minutes=settings.listing_quality_gate_minutes
+            )
+            listing.broken_since = None
+            listing.disabled_at = None
+            listing.recovered_at = None
 
         # Host change: rewrite every active/disabled config's vless link so
         # the buyer's clipboard QR keeps working without a re-buy.
@@ -698,6 +717,15 @@ async def patch_listing(
                     "از منوی کانفیگ‌ها مجدداً فعال کنید."
                 ),
                 only_with_price_flag=True,
+            )
+        if edited and listing.status == ListingStatus.pending:
+            await notify_users(
+                [listing.seller_user_id],
+                (
+                    f"🧪 اوت\u200cباند <code>{listing.title}</code> (#{listing.id}) "
+                    "پس از ویرایش، دوباره در وضعیت <b>pending</b> قرار گرفت "
+                    "تا تست کیفیت اتصال انجام شود."
+                ),
             )
 
     return _listing_to_out(listing, user.username)

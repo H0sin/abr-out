@@ -59,7 +59,7 @@ async def listing_quality_gate_once() -> None:
     # ``broken`` so the listing returns to the marketplace immediately.
     recovery_n = 1
     async with SessionLocal() as session:
-        pending_failed: list[tuple[int, int]] = []
+        pending_failed: list[tuple[int, int, str]] = []
         promoted: list[tuple[int, Decimal]] = []
         rows = (
             await session.execute(
@@ -146,8 +146,26 @@ async def listing_quality_gate_once() -> None:
             await notify_channel_new_listing(listing_id, price_per_gb_usd)
 
         # Notifications are best-effort and should not affect listing state.
-        broken_transitions = pending_failed + demoted
-        for listing_id, seller_user_id in broken_transitions:
+        for listing_id, seller_user_id, listing_title in pending_failed:
+            await notify_users(
+                [seller_user_id],
+                (
+                    "⚠️ تست اوت\u200cباند جدید شما ناموفق بود.\n"
+                    f"<b>عنوان:</b> <code>{listing_title}</code>\n"
+                    f"<b>آیدی:</b> <code>#{listing_id}</code>\n"
+                    "لطفاً تنظیمات سرور/تونل را بررسی و اصلاح کنید و دوباره تست بگیرید."
+                ),
+            )
+            await notify_listing_buyers(
+                session,
+                listing_id,
+                (
+                    f"⚠️ اتصال اوت‌باند #{listing_id} موقتاً قطع شده است.\n"
+                    "فعلاً از یک سرویس دیگر استفاده کنید تا این اوت‌باند پایدار شود."
+                ),
+            )
+
+        for listing_id, seller_user_id in demoted:
             await notify_users(
                 [seller_user_id],
                 (
@@ -188,7 +206,7 @@ async def _pending_pass(
     session,
     rows,
     now: datetime,
-) -> tuple[list[tuple[int, Decimal]], list[tuple[int, int]]]:
+) -> tuple[list[tuple[int, Decimal]], list[tuple[int, int, str]]]:
     """Pending lifecycle.
 
     - Promotes any pending listing that has at least one ``ok=true``
@@ -259,7 +277,7 @@ async def _pending_pass(
         )
     failed_set = set(failed_ids)
     return promoted_rows, [
-        (listing.id, listing.seller_user_id)
+        (listing.id, listing.seller_user_id, listing.title)
         for listing in rows
         if listing.id in failed_set
     ]
