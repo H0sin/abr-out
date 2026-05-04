@@ -55,7 +55,7 @@ class Settings(BaseSettings):
 
     # Wallet & billing
     commission_pct: Decimal = Decimal("0.15")
-    min_topup_usd: Decimal = Decimal("2")
+    min_topup_usd: Decimal = Decimal("1")
     traffic_poll_interval_sec: int = 60
     # Kill-switch for the panel-side reset step of the read→reset poller.
     # When False, the poller still reads and bills via diff but does not
@@ -100,6 +100,12 @@ class Settings(BaseSettings):
     # Payments
     nowpayments_api_key: str = ""
     nowpayments_ipn_secret: str = ""
+    # Plisio (alternate gateway, used for sub-threshold top-ups because
+    # NowPayments enforces a relatively high per-coin minimum).
+    plisio_secret_key: str = ""
+    # Top-ups strictly below this USD amount are routed to Plisio (when
+    # configured); >= this amount are routed to NowPayments.
+    plisio_threshold_usd: Decimal = Decimal("10")
 
     # --- USDT-BSC withdrawals ---
     # Public BSC RPC (mainnet by default; switch to testnet for staging).

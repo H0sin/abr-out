@@ -11,6 +11,7 @@ from app.bot.keyboards import CB_TOPUP, main_menu_inline
 from app.common.db.models import PaymentGateway, PaymentIntent, PaymentStatus
 from app.common.db.session import SessionLocal
 from app.common.logging import logger
+from app.common.payment import plisio as plisio_mod
 from app.common.payment.nowpayments import (
     create_invoice,
     gen_order_id,
@@ -25,12 +26,31 @@ class TopUpStates(StatesGroup):
     waiting_amount = State()
 
 
+def _plisio_enabled() -> bool:
+    return bool(get_settings().plisio_secret_key)
+
+
 async def _effective_min_usd() -> Decimal:
     settings = get_settings()
+    # When Plisio is configured we can accept very small amounts via Plisio,
+    # so the NowPayments per-coin floor no longer constrains the user.
+    if _plisio_enabled():
+        return settings.min_topup_usd
     np_min = await get_min_amount_usd()
     if np_min is None:
         return settings.min_topup_usd
     return max(settings.min_topup_usd, np_min)
+
+
+def _pick_gateway(amount_usd: Decimal) -> PaymentGateway:
+    """Route sub-threshold top-ups to Plisio; the rest to NowPayments.
+
+    Falls back to NowPayments when Plisio is not configured.
+    """
+    settings = get_settings()
+    if _plisio_enabled() and amount_usd < settings.plisio_threshold_usd:
+        return PaymentGateway.plisio
+    return PaymentGateway.nowpayments
 
 
 @router.callback_query(F.data == CB_TOPUP)
@@ -42,7 +62,7 @@ async def on_topup_start(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.message.answer(
         f"💵 مبلغ دلاری که می‌خواهید به کیف پول اضافه شود را وارد کنید:\n"
         f"(حداقل: <b>{min_usd}$</b>)\n\n"
-        f"💎 پرداخت با ارز دیجیتال از طریق NowPayments انجام می‌شود.\n\n"
+        f"💎 پرداخت با ارز دیجیتال انجام می‌شود.\n\n"
         f"مثال: <code>5</code> یا <code>10.50</code>",
     )
     await cb.answer()
@@ -73,12 +93,22 @@ async def on_topup_amount(message: Message, state: FSMContext) -> None:
 
     processing_msg = await message.answer("⏳ در حال ساخت لینک پرداخت...")
 
-    order_id = gen_order_id()
+    gateway = _pick_gateway(amount_usd)
+    if gateway == PaymentGateway.plisio:
+        order_id = plisio_mod.gen_order_id()
+        invoice_fn = plisio_mod.create_invoice
+        gateway_label = "Plisio"
+    else:
+        order_id = gen_order_id()
+        invoice_fn = create_invoice
+        gateway_label = "NowPayments"
+
     try:
-        payment = await create_invoice(amount_usd, order_id, message.from_user.id)
+        payment = await invoice_fn(amount_usd, order_id, message.from_user.id)
     except Exception:
         logger.exception(
-            "NowPayments invoice creation failed for user {}", message.from_user.id
+            "{} invoice creation failed for user {}",
+            gateway_label, message.from_user.id,
         )
         await processing_msg.edit_text(
             "❌ خطا در ساخت لینک پرداخت. لطفاً دوباره امتحان کنید.",
@@ -89,7 +119,7 @@ async def on_topup_amount(message: Message, state: FSMContext) -> None:
     async with SessionLocal() as session:
         intent = PaymentIntent(
             user_id=message.from_user.id,
-            gateway=PaymentGateway.nowpayments,
+            gateway=gateway,
             amount=payment["amount_usd"],
             currency="USD",
             status=PaymentStatus.pending,
@@ -107,7 +137,7 @@ async def on_topup_amount(message: Message, state: FSMContext) -> None:
         f"✅ لینک پرداخت آماده شد.\n\n"
         f"💵 مبلغ: <b>{amount_usd}$</b>\n"
         f"🔢 کد پیگیری: <code>{payment['order_id']}</code>\n\n"
-        f"💎 روی دکمه زیر کلیک کنید و در صفحه‌ی NowPayments ارز دیجیتال موردنظر "
+        f"💎 روی دکمه زیر کلیک کنید و در صفحه‌ی {gateway_label} ارز دیجیتال موردنظر "
         f"خود (USDT, BTC, …) را انتخاب کنید:",
         reply_markup=kbd,
     )

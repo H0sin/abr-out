@@ -66,6 +66,7 @@ class TxnType(str, enum.Enum):
 class PaymentGateway(str, enum.Enum):
     manual = "manual"
     nowpayments = "nowpayments"
+    plisio = "plisio"
 
 
 class PaymentStatus(str, enum.Enum):

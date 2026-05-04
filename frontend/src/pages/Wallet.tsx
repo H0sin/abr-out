@@ -99,7 +99,7 @@ export function Wallet() {
             <div className="title">واریز و برداشت</div>
             <p className="muted mt-2">
               برای شارژ کیف پول به ربات بازگردید و گزینه «💳 واریز» را انتخاب
-              کنید (ارز دیجیتال از طریق NowPayments). برای برداشت USDT روی شبکهٔ
+              کنید (ارز دیجیتال از طریق NowPayments / Plisio). برای برداشت USDT روی شبکهٔ
               BSC از دکمهٔ زیر استفاده کنید.
             </p>
             <div className="row mt-3" style={{ gap: 8 }}>

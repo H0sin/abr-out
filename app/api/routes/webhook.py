@@ -16,6 +16,7 @@ from app.common.db.models import (
 from app.common.db.session import get_session
 from app.common.logging import logger
 from app.common.payment.nowpayments import verify_nowpayments_signature
+from app.common.payment.plisio import verify_plisio_signature
 from app.common.settings import get_settings
 from app.common.telegram_bot import send_message
 
@@ -139,5 +140,120 @@ async def nowpayments_ipn(
         )
 
     # else: in-flight states (waiting/confirming/confirmed/sending) → no-op.
+
+    return Response(status_code=200)
+
+
+# Plisio invoice callback statuses (per documentation):
+#   new, pending, pending internal       -> in-flight, no DB change
+#   completed                            -> credit wallet
+#   expired                              -> may be partially paid; treat as failed
+#                                          (admin can manually adjust if needed)
+#   error, cancelled                     -> mark failed, notify
+#   cancelled duplicate                  -> no-op (a sibling invoice succeeded)
+_PLISIO_SUCCESS = {"completed"}
+_PLISIO_FAILURE = {"error", "cancelled", "expired"}
+_PLISIO_DUPLICATE = {"cancelled duplicate", "cancelled_duplicate"}
+
+
+@router.post("/plisio")
+async def plisio_ipn(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """
+    Plisio IPN callback (with ``?json=true``). Verifies the HMAC-SHA1
+    ``verify_hash`` over the JSON body, then updates the corresponding
+    ``PaymentIntent`` and credits the wallet on success. Idempotent.
+    """
+    raw = await request.body()
+    settings = get_settings()
+
+    if not verify_plisio_signature(raw, settings.plisio_secret_key):
+        logger.warning("Plisio IPN: signature verification failed")
+        return Response(status_code=401)
+
+    try:
+        payload = await request.json()
+    except Exception:
+        return Response(status_code=400)
+
+    order_id: str = str(payload.get("order_number") or "")
+    invoice_status: str = str(payload.get("status") or "").lower()
+    source_amount = payload.get("source_amount")
+
+    if not order_id:
+        logger.warning("Plisio IPN: missing order_number")
+        return Response(status_code=200)
+
+    result = await session.execute(
+        select(PaymentIntent)
+        .where(
+            PaymentIntent.external_ref == order_id,
+            PaymentIntent.gateway == PaymentGateway.plisio,
+        )
+        .with_for_update()
+    )
+    intent = result.scalar_one_or_none()
+    if intent is None:
+        logger.warning("Plisio IPN: unknown order_number={}", order_id)
+        return Response(status_code=200)
+
+    if intent.status != PaymentStatus.pending:
+        logger.info(
+            "Plisio IPN: order={} already in status {}, skipping",
+            order_id, intent.status,
+        )
+        return Response(status_code=200)
+
+    if invoice_status in _PLISIO_SUCCESS:
+        credit_amount: Decimal = intent.amount
+        if source_amount is not None:
+            try:
+                echoed = Decimal(str(source_amount))
+                if abs(echoed - intent.amount) > Decimal("0.01"):
+                    logger.warning(
+                        "Plisio IPN: source_amount={} differs from intent={} for order={}",
+                        echoed, intent.amount, order_id,
+                    )
+            except Exception:
+                pass
+
+        wallet_tx = WalletTransaction(
+            user_id=intent.user_id,
+            amount=credit_amount,
+            currency=intent.currency or "USD",
+            type=TxnType.topup,
+            ref=order_id,
+            idempotency_key=f"plisio-{order_id}",
+        )
+        session.add(wallet_tx)
+        intent.status = PaymentStatus.confirmed
+        await session.commit()
+        logger.info(
+            "Plisio: topped up {} USD for user {}", credit_amount, intent.user_id
+        )
+        await send_message(
+            intent.user_id,
+            f"✅ موجودی شما <b>{credit_amount}$</b> شارژ شد.\n"
+            f"🔢 کد پیگیری: <code>{order_id}</code>",
+        )
+
+    elif invoice_status in _PLISIO_FAILURE:
+        intent.status = PaymentStatus.failed
+        await session.commit()
+        await send_message(
+            intent.user_id,
+            f"❌ پرداخت شما انجام نشد یا منقضی شد.\n"
+            f"🔢 کد پیگیری: <code>{order_id}</code>",
+        )
+
+    elif invoice_status in _PLISIO_DUPLICATE:
+        # The user switched cryptocurrencies; a sibling invoice will (or did)
+        # carry the actual payment. Leave this intent pending — the success
+        # callback for the sibling order_number handles credit.
+        logger.info("Plisio IPN: order={} cancelled-duplicate, leaving pending", order_id)
+
+    # else: in-flight states (new/pending/pending internal) → no-op.
 
     return Response(status_code=200)
