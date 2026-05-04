@@ -66,6 +66,7 @@ from app.common.panel.xui_client import (
     XuiError,
 )
 from app.common.settings import get_settings
+from app.worker.jobs.enforce_quota import enforce_quotas_once
 
 ZERO = Decimal("0")
 _BYTES_PER_GB = Decimal(1024**3)
@@ -526,3 +527,12 @@ async def poll_traffic_once() -> None:
         summary["reset_failed"],
         outbound_reset_ok,
     )
+
+    # --- end-of-cycle: enforce per-config volume caps ---
+    # The panel-side ``totalGB`` cap never trips because we reset client
+    # counters each cycle, so the bot has to enforce ``total_gb_limit``
+    # itself based on the cumulative ConfigUsage we just inserted.
+    try:
+        await enforce_quotas_once()
+    except Exception:
+        logger.exception("[poll] cycle={} enforce_quotas_once failed", cycle_id)
