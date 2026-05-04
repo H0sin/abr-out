@@ -405,6 +405,18 @@ class XuiClient:
         """
         await self._request("POST", "/panel/api/inbounds/resetAllTraffics")
 
+    # --- server / xray ---
+
+    async def restart_xray(self) -> None:
+        """Restart the Xray core on the panel.
+
+        Endpoint: ``POST /panel/api/server/restartXrayService``. Used after
+        flipping clients to ``enable=False`` so any already-established
+        connections are torn down immediately instead of lingering and
+        continuing to consume traffic until Xray notices the config change.
+        """
+        await self._request("POST", "/panel/api/server/restartXrayService")
+
 
 def build_vless_link(
     *, host: str, port: int, client_uuid: uuid.UUID, remark: str

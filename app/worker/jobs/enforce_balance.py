@@ -4,9 +4,14 @@ Runs every poll cycle. Two passes:
 
 1. **Disable pass.** For every distinct buyer who currently has at least one
    ``ConfigStatus.active`` config, compute their wallet balance. If it is at
-   or below zero, disable every active config they own in the 3x-ui panel
+   or below zero, we first force a full traffic poll so any bytes already
+   consumed since the previous poll are billed *before* we cut the user
+   off; then we disable every active config they own in the 3x-ui panel
    and the DB, stamp ``Config.auto_disabled_at`` so we can recognise the
-   row later, and notify the buyer once.
+   row later, and notify the buyer once. After the batch, we ask the
+   panel to restart Xray so any already-established connections are torn
+   down immediately (otherwise an open VLESS connection keeps pumping
+   traffic until Xray re-reads the config).
 
 2. **Re-enable pass.** For every distinct buyer who has at least one config
    with ``auto_disabled_at IS NOT NULL`` (i.e. was previously auto-disabled
@@ -39,6 +44,7 @@ from app.common.db.wallet import get_balance
 from app.common.logging import logger
 from app.common.notifications import notify_users
 from app.common.panel.xui_client import XuiClient, XuiError
+from app.worker.jobs.poll_traffic import poll_traffic_once
 
 
 async def _set_panel_enabled(
@@ -75,11 +81,59 @@ async def _set_panel_enabled(
     return False
 
 
+async def _restart_xray_best_effort() -> None:
+    """Ask the panel to restart Xray; never raise."""
+    try:
+        async with XuiClient() as xui:
+            await xui.restart_xray()
+        logger.info("[enforce_balance] xray restart requested")
+    except Exception:
+        logger.exception("[enforce_balance] xray restart failed")
+
+
+async def _select_buyers_at_or_below_zero(session) -> list[int]:
+    """Return distinct buyer ids that have ≥1 active config and balance ≤ 0."""
+    rows = (
+        await session.execute(
+            select(Config.buyer_user_id)
+            .where(Config.status == ConfigStatus.active)
+            .distinct()
+        )
+    ).all()
+    candidates = [int(r[0]) for r in rows]
+    out: list[int] = []
+    for buyer_id in candidates:
+        bal = await get_balance(session, buyer_id)
+        if bal <= Decimal("0"):
+            out.append(buyer_id)
+    return out
+
+
 async def enforce_balances_once() -> None:
     now = datetime.now(timezone.utc)
 
+    # --- Pre-check: are there any buyers who need disabling? ------------
+    # We only want to incur the cost of a full traffic poll when at least
+    # one buyer is actually below zero — otherwise this job stays cheap.
+    async with SessionLocal() as session:
+        candidates = await _select_buyers_at_or_below_zero(session)
+
+    if candidates:
+        # Bill the latest traffic before cutting the user off, otherwise
+        # everything they used in the current poll window would be free.
+        # poll_traffic_once already isolates failures per-listing, so a
+        # bad inbound won't prevent disabling.
+        try:
+            await poll_traffic_once()
+        except Exception:
+            logger.exception(
+                "[enforce_balance] pre-disable poll failed; proceeding anyway"
+            )
+
     async with SessionLocal() as session:
         # --- Pass 1: disable for buyers at or below zero balance ----------
+        # Re-evaluate after the poll: a buyer might have just been billed
+        # and only now crossed zero, or (unlikely) a top-up landed.
         active_buyer_rows = (
             await session.execute(
                 select(Config.buyer_user_id)
@@ -200,6 +254,14 @@ async def enforce_balances_once() -> None:
                 reenabled_users.append(buyer_id)
 
         await session.commit()
+
+    # --- Restart Xray once if anything changed on the panel --------------
+    # Without this, a VLESS connection that's already established stays
+    # alive and keeps consuming bandwidth until Xray re-reads the config
+    # on its own (which can be never, in practice). We restart only when
+    # we actually flipped at least one client to disabled.
+    if disabled_users:
+        await _restart_xray_best_effort()
 
     # --- Notifications (best-effort, outside the DB session) -------------
     for buyer_id in disabled_users:
