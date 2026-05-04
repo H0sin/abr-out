@@ -93,31 +93,25 @@ def verify_plisio_signature(raw_body: bytes, secret: str) -> bool:
       hmac_sha1(secret, JSON.stringify({...payload, verify_hash removed}))
 
     where the JSON serialization preserves the key order from the original
-    payload. We therefore parse with object_pairs_hook to keep order, drop
-    ``verify_hash``, and re-serialize with no extra whitespace (matching
-    JS ``JSON.stringify`` defaults).
+    payload. Python ``dict`` preserves insertion order (3.7+), so a normal
+    ``json.loads`` is sufficient and also handles nested objects/arrays
+    correctly (an earlier version used ``object_pairs_hook=list`` which only
+    preserved order at the top level and silently corrupted nested objects).
     """
     if not secret:
         return False
     try:
-        # Preserve original key order to match JSON.stringify() output.
-        data = json.loads(raw_body, object_pairs_hook=list)
+        data = json.loads(raw_body)
     except json.JSONDecodeError:
         return False
-    if not isinstance(data, list):
+    if not isinstance(data, dict):
         return False
 
-    received_sig = ""
-    pairs: list[tuple[str, object]] = []
-    for k, v in data:
-        if k == "verify_hash":
-            received_sig = str(v or "")
-        else:
-            pairs.append((k, v))
+    received_sig = str(data.pop("verify_hash", "") or "")
     if not received_sig:
         return False
 
-    canonical = json.dumps(dict(pairs), separators=(",", ":"), ensure_ascii=False)
+    canonical = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
     computed = hmac_mod.new(
         secret.encode("utf-8"),
         canonical.encode("utf-8"),

@@ -222,6 +222,13 @@ class Listing(Base):
     recovered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # How many times we've already notified buyers about the current
+    # outage of this listing. Capped by ``listing_quality_gate`` so a
+    # seller hammering "retry test" doesn't spam buyer chats. Reset to
+    # 0 whenever the listing returns to ``active``.
+    broken_notify_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     sales_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # Last-seen panel-level cumulative up/down for this inbound.
     # Used by the traffic poller for diff-based outbound billing

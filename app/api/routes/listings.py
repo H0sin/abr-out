@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -8,6 +9,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
+from sqlalchemy.sql import text
 
 from app.api.deps import current_user
 from app.common.db.models import (
@@ -70,6 +72,45 @@ _IPV4_RE = re.compile(
 )
 
 
+def _validate_public_ipv4(raw: str) -> str:
+    """Return a normalised IPv4 string or raise ``ValueError``.
+
+    Rejects loopback, RFC1918 private (10/8, 172.16/12, 192.168/16),
+    link-local (169.254/16), multicast, reserved and the unspecified
+    address. CGNAT (100.64.0.0/10) is allowed because Iranian ISPs use it
+    in production for residential subscribers. The strict reject-list
+    prevents the Iran-side prober from being tricked into scanning the
+    seller's internal network (SSRF) or pointing buyer vless links at a
+    non-routable address.
+    """
+    s = (raw or "").strip()
+    if not _IPV4_RE.fullmatch(s):
+        raise ValueError("iran_host must be a valid IPv4 address")
+    try:
+        ip = ipaddress.IPv4Address(s)
+    except ValueError as e:
+        raise ValueError("iran_host must be a valid IPv4 address") from e
+    if (
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    ):
+        # 100.64.0.0/10 (CGNAT, RFC6598) is flagged ``is_private`` by the
+        # stdlib but is legitimate for Iranian residential ISPs.
+        if ipaddress.IPv4Address("100.64.0.0") <= ip <= ipaddress.IPv4Address(
+            "100.127.255.255"
+        ):
+            return s
+        raise ValueError(
+            "iran_host must be a public IPv4 address (private/loopback/link-local "
+            "addresses are not allowed)"
+        )
+    return s
+
+
 class ListingOut(BaseModel):
     id: int
     # title/iran_host/seller_username are seller-identifying; the marketplace
@@ -116,10 +157,7 @@ class ListingCreateIn(BaseModel):
     @field_validator("iran_host")
     @classmethod
     def _ipv4_only(cls, v: str) -> str:
-        v = v.strip()
-        if not _IPV4_RE.fullmatch(v):
-            raise ValueError("iran_host must be a valid IPv4 address")
-        return v
+        return _validate_public_ipv4(v)
 
 
 @router.get("", response_model=list[ListingOut])
@@ -242,8 +280,9 @@ async def create_listing(
         body.price_per_gb_usd,
     )
     async with SessionLocal() as session:
-        # Enforce the per-seller listing cap. ``deleted`` rows are the only
-        # state that frees a slot; ``active`` and ``disabled`` both count.
+        # Pre-check (fast-fail before the slow panel call). Re-checked under
+        # an advisory lock further below to close the TOCTOU window where two
+        # concurrent requests from the same seller could both pass the cap.
         active_count = (
             await session.execute(
                 select(func.count())
@@ -342,6 +381,49 @@ async def create_listing(
 
     async with SessionLocal() as session:
         settings = get_settings()
+        # Acquire a per-seller advisory lock so two concurrent listing
+        # creates from the same seller are serialised. The lock is held
+        # until commit/rollback, which closes the TOCTOU window between
+        # the cap re-check below and the INSERT. Namespace=2 distinguishes
+        # this from the ``ns=1`` lock used by the withdrawal flow.
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(:ns, :uid)"),
+            {"ns": 2, "uid": int(user.telegram_id) & 0x7FFFFFFF},
+        )
+
+        # Re-check the per-seller cap under the lock. This is the
+        # authoritative check; the earlier pre-check is just for UX.
+        locked_count = (
+            await session.execute(
+                select(func.count())
+                .select_from(Listing)
+                .where(
+                    Listing.seller_user_id == user.telegram_id,
+                    Listing.status != ListingStatus.deleted,
+                )
+            )
+        ).scalar_one()
+        if int(locked_count) >= MAX_LISTINGS_PER_SELLER:
+            await session.rollback()
+            # Clean up the panel inbound we just provisioned — the listing
+            # will not be saved.
+            try:
+                async with XuiClient() as xui:
+                    await xui.delete_inbound(panel_inbound_id)
+            except Exception as cleanup_err:  # noqa: BLE001
+                logger.exception(
+                    "[listings.create] cap-race cleanup of inbound {} failed: {}",
+                    panel_inbound_id,
+                    cleanup_err,
+                )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"max {MAX_LISTINGS_PER_SELLER} listings per seller; "
+                    "delete an existing one before creating another"
+                ),
+            )
+
         pending_until = datetime.now(timezone.utc) + timedelta(
             minutes=settings.listing_quality_gate_minutes
         )
@@ -435,10 +517,7 @@ class ListingPatchIn(BaseModel):
     def _ipv4_only(cls, v: str | None) -> str | None:
         if v is None:
             return v
-        v = v.strip()
-        if not _IPV4_RE.fullmatch(v):
-            raise ValueError("iran_host must be a valid IPv4 address")
-        return v
+        return _validate_public_ipv4(v)
 
 
 def _listing_to_out(l: Listing, seller_username: str | None) -> ListingOut:

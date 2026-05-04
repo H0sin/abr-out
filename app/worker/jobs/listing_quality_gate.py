@@ -49,6 +49,13 @@ from app.common.notifications import (
 from app.common.settings import get_settings
 
 
+# Maximum number of buyer-facing "outbound is down" notifications to send
+# for a single outage. After this cap, the listing can keep churning
+# pending<->broken (e.g. seller hammering "retry test") without spamming
+# buyer chats. Counter resets to 0 on recovery.
+_BROKEN_NOTIFY_CAP = 3
+
+
 async def listing_quality_gate_once() -> None:
     settings = get_settings()
     now = datetime.now(timezone.utc)
@@ -59,7 +66,7 @@ async def listing_quality_gate_once() -> None:
     # ``broken`` so the listing returns to the marketplace immediately.
     recovery_n = 1
     async with SessionLocal() as session:
-        pending_failed: list[tuple[int, int, str]] = []
+        pending_failed: list[tuple[int, int, str, int]] = []
         promoted: list[tuple[int, Decimal]] = []
         rows = (
             await session.execute(
@@ -75,7 +82,7 @@ async def listing_quality_gate_once() -> None:
                 select(Listing).where(Listing.status == ListingStatus.active)
             )
         ).scalars().all()
-        demoted: list[tuple[int, int]] = []
+        demoted: list[tuple[int, int, int]] = []
         for listing in active_rows:
             last_ok = listing.last_ok_ping_at
             if last_ok is not None and last_ok >= demote_cutoff:
@@ -102,7 +109,7 @@ async def listing_quality_gate_once() -> None:
                     recovered_at=None,
                 )
             )
-            demoted.append((listing.id, listing.seller_user_id))
+            demoted.append((listing.id, listing.seller_user_id, listing.broken_notify_count))
 
         # 3) Recover pass: broken -> active after first ok=true sample
         # since broken_since.
@@ -136,6 +143,7 @@ async def listing_quality_gate_once() -> None:
                     status=ListingStatus.active,
                     broken_since=None,
                     recovered_at=now,
+                    broken_notify_count=0,
                 )
             )
             recovered.append(listing.id)
@@ -146,7 +154,7 @@ async def listing_quality_gate_once() -> None:
             await notify_channel_new_listing(listing_id, price_per_gb_usd)
 
         # Notifications are best-effort and should not affect listing state.
-        for listing_id, seller_user_id, listing_title in pending_failed:
+        for listing_id, seller_user_id, listing_title, prev_count in pending_failed:
             await notify_users(
                 [seller_user_id],
                 (
@@ -156,16 +164,22 @@ async def listing_quality_gate_once() -> None:
                     "لطفاً تنظیمات سرور/تونل را بررسی و اصلاح کنید و دوباره تست بگیرید."
                 ),
             )
-            await notify_listing_buyers(
-                session,
-                listing_id,
-                (
-                    f"⚠️ اتصال اوت‌باند #{listing_id} موقتاً قطع شده است.\n"
-                    "فعلاً از یک سرویس دیگر استفاده کنید تا این اوت‌باند پایدار شود."
-                ),
-            )
+            if prev_count < _BROKEN_NOTIFY_CAP:
+                await notify_listing_buyers(
+                    session,
+                    listing_id,
+                    (
+                        f"⚠️ اتصال اوت‌باند #{listing_id} موقتاً قطع شده است.\n"
+                        "فعلاً از یک سرویس دیگر استفاده کنید تا این اوت‌باند پایدار شود."
+                    ),
+                )
+                await session.execute(
+                    update(Listing)
+                    .where(Listing.id == listing_id)
+                    .values(broken_notify_count=Listing.broken_notify_count + 1)
+                )
 
-        for listing_id, seller_user_id in demoted:
+        for listing_id, seller_user_id, prev_count in demoted:
             await notify_users(
                 [seller_user_id],
                 (
@@ -173,14 +187,20 @@ async def listing_quality_gate_once() -> None:
                     "اتصال سرور/تونل را بررسی و رفع کنید."
                 ),
             )
-            await notify_listing_buyers(
-                session,
-                listing_id,
-                (
-                    f"⚠️ اتصال اوت‌باند #{listing_id} موقتاً قطع شده است.\n"
-                    "فعلاً از یک سرویس دیگر استفاده کنید تا این اوت‌باند پایدار شود."
-                ),
-            )
+            if prev_count < _BROKEN_NOTIFY_CAP:
+                await notify_listing_buyers(
+                    session,
+                    listing_id,
+                    (
+                        f"⚠️ اتصال اوت‌باند #{listing_id} موقتاً قطع شده است.\n"
+                        "فعلاً از یک سرویس دیگر استفاده کنید تا این اوت‌باند پایدار شود."
+                    ),
+                )
+                await session.execute(
+                    update(Listing)
+                    .where(Listing.id == listing_id)
+                    .values(broken_notify_count=Listing.broken_notify_count + 1)
+                )
 
         for listing_id in recovered:
             await notify_listing_buyers(
@@ -191,6 +211,10 @@ async def listing_quality_gate_once() -> None:
                     "اکنون می‌توانید دوباره از آن استفاده کنید."
                 ),
             )
+
+        # Persist any broken_notify_count increments queued during the
+        # notification loops above.
+        await session.commit()
 
         if demoted or recovered:
             logger.info(
@@ -206,7 +230,7 @@ async def _pending_pass(
     session,
     rows,
     now: datetime,
-) -> tuple[list[tuple[int, Decimal]], list[tuple[int, int, str]]]:
+) -> tuple[list[tuple[int, Decimal]], list[tuple[int, int, str, int]]]:
     """Pending lifecycle.
 
     - Promotes any pending listing that has at least one ``ok=true``
@@ -244,6 +268,7 @@ async def _pending_pass(
                 .values(
                     status=ListingStatus.active,
                     pending_until_at=None,
+                    broken_notify_count=0,
                 )
             )
             promoted_count += 1
@@ -277,7 +302,7 @@ async def _pending_pass(
         )
     failed_set = set(failed_ids)
     return promoted_rows, [
-        (listing.id, listing.seller_user_id, listing.title)
+        (listing.id, listing.seller_user_id, listing.title, listing.broken_notify_count)
         for listing in rows
         if listing.id in failed_set
     ]

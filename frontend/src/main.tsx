@@ -30,16 +30,29 @@ tg?.expand();
 // initData to the WebApp.
 const hasInitData = Boolean(tg?.initData);
 if (!hasInitData) {
-  document.getElementById("root")!.innerHTML = `
-    <div style="padding:24px;font:14px/1.7 Vazirmatn,system-ui,sans-serif;
-                color:var(--tg-theme-text-color,#111);text-align:center;">
-      <h2 style="margin:0 0 12px">دسترسی فقط از طریق ربات</h2>
-      <p>این صفحه باید از داخل ربات تلگرام و با دکمهٔ «🚀 باز کردن مینی‌اپ» باز شود.</p>
-      <p style="opacity:.7;font-size:12px;margin-top:24px">
-        debug: tg=${tg ? "yes" : "no"}, initData=${tg?.initData?.length ?? 0} chars,
-        version=${tg?.version ?? "?"}, platform=${tg?.platform ?? "?"}
-      </p>
-    </div>`;
+  // Build the fallback DOM node-by-node with textContent so any client-
+  // controlled values (tg.version, tg.platform) cannot inject markup. We
+  // intentionally avoid innerHTML here.
+  const root = document.getElementById("root")!;
+  root.textContent = "";
+  const wrap = document.createElement("div");
+  wrap.style.cssText =
+    "padding:24px;font:14px/1.7 Vazirmatn,system-ui,sans-serif;" +
+    "color:var(--tg-theme-text-color,#111);text-align:center;";
+  const h2 = document.createElement("h2");
+  h2.style.cssText = "margin:0 0 12px";
+  h2.textContent = "دسترسی فقط از طریق ربات";
+  const p1 = document.createElement("p");
+  p1.textContent =
+    "این صفحه باید از داخل ربات تلگرام و با دکمهٔ «🚀 باز کردن مینی‌اپ» باز شود.";
+  const p2 = document.createElement("p");
+  p2.style.cssText = "opacity:.7;font-size:12px;margin-top:24px";
+  p2.textContent =
+    `debug: tg=${tg ? "yes" : "no"}, ` +
+    `initData=${tg?.initData?.length ?? 0} chars, ` +
+    `version=${tg?.version ?? "?"}, platform=${tg?.platform ?? "?"}`;
+  wrap.append(h2, p1, p2);
+  root.append(wrap);
   throw new Error("missing Telegram WebApp initData");
 }
 

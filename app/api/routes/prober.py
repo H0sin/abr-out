@@ -96,6 +96,27 @@ async def post_samples(samples: list[PingSampleIn]) -> Response:
     if not samples:
         return Response(status_code=204)
     async with SessionLocal() as session:
+        # Resolve which listing_ids actually exist so we don't insert orphan
+        # PingSample rows from a misbehaving prober. Unknown ids are dropped
+        # with a single warning.
+        candidate_ids = {s.listing_id for s in samples}
+        known_rows = (
+            await session.execute(
+                select(Listing.id).where(Listing.id.in_(candidate_ids))
+            )
+        ).scalars().all()
+        known_ids = set(known_rows)
+        unknown = candidate_ids - known_ids
+        if unknown:
+            from app.common.logging import logger
+
+            logger.warning(
+                "[prober] dropping samples for unknown listing_ids: {}", sorted(unknown)
+            )
+        samples = [s for s in samples if s.listing_id in known_ids]
+        if not samples:
+            return Response(status_code=204)
+
         # Insert raw samples first; PingSample is the source of truth
         # consumed by aggregate_pings_once and the recovery check.
         rows: list[PingSample] = []
