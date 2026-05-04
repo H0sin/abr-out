@@ -34,13 +34,18 @@ This job runs every 30s and performs three passes:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from sqlalchemy import exists, select, update
 
 from app.common.db.models import Listing, ListingStatus, PingSample
 from app.common.db.session import SessionLocal
 from app.common.logging import logger
-from app.common.notifications import notify_listing_buyers, notify_users
+from app.common.notifications import (
+    notify_channel_new_listing,
+    notify_listing_buyers,
+    notify_users,
+)
 from app.common.settings import get_settings
 
 
@@ -55,13 +60,14 @@ async def listing_quality_gate_once() -> None:
     recovery_n = 1
     async with SessionLocal() as session:
         pending_failed: list[tuple[int, int]] = []
+        promoted: list[tuple[int, Decimal]] = []
         rows = (
             await session.execute(
                 select(Listing).where(Listing.status == ListingStatus.pending)
             )
         ).scalars().all()
         if rows:
-            pending_failed = await _pending_pass(session, rows, now)
+            promoted, pending_failed = await _pending_pass(session, rows, now)
 
         # 2) Demote pass: active -> broken.
         active_rows = (
@@ -136,6 +142,9 @@ async def listing_quality_gate_once() -> None:
 
         await session.commit()
 
+        for listing_id, price_per_gb_usd in promoted:
+            await notify_channel_new_listing(listing_id, price_per_gb_usd)
+
         # Notifications are best-effort and should not affect listing state.
         broken_transitions = pending_failed + demoted
         for listing_id, seller_user_id in broken_transitions:
@@ -175,7 +184,11 @@ async def listing_quality_gate_once() -> None:
             )
 
 
-async def _pending_pass(session, rows, now: datetime) -> list[tuple[int, int]]:
+async def _pending_pass(
+    session,
+    rows,
+    now: datetime,
+) -> tuple[list[tuple[int, Decimal]], list[tuple[int, int]]]:
     """Pending lifecycle.
 
     - Promotes any pending listing that has at least one ``ok=true``
@@ -186,7 +199,8 @@ async def _pending_pass(session, rows, now: datetime) -> list[tuple[int, int]]:
       row with a "connection failed" badge and a "retry test" button
       that resets it back to ``pending`` for another quality-gate pass.
     """
-    promoted = 0
+    promoted_count = 0
+    promoted_rows: list[tuple[int, Decimal]] = []
     failed_ids: list[int] = []
 
     for listing in rows:
@@ -214,7 +228,8 @@ async def _pending_pass(session, rows, now: datetime) -> list[tuple[int, int]]:
                     pending_until_at=None,
                 )
             )
-            promoted += 1
+            promoted_count += 1
+            promoted_rows.append((listing.id, listing.price_per_gb_usd))
             continue
 
         # Still no ok sample. Mark as broken once the deadline elapses
@@ -235,15 +250,15 @@ async def _pending_pass(session, rows, now: datetime) -> list[tuple[int, int]]:
             )
             failed_ids.append(listing.id)
 
-    if promoted or failed_ids:
+    if promoted_count or failed_ids:
         logger.info(
             "[quality_gate] promoted={} failed={} (failed_ids={})",
-            promoted,
+            promoted_count,
             len(failed_ids),
             failed_ids,
         )
     failed_set = set(failed_ids)
-    return [
+    return promoted_rows, [
         (listing.id, listing.seller_user_id)
         for listing in rows
         if listing.id in failed_set

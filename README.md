@@ -25,6 +25,7 @@ Services (docker-compose):
 ```powershell
 copy .env.example .env
 # مقادیر BOT_TOKEN, XUI_*, NOWPAYMENTS_* را پر کن
+# برای اعلان اوت‌باند جدید در کانال: REQUIRED_CHANNEL و ترجیحاً REQUIRED_CHANNEL_POST_CHAT_ID=-100... را هم ست کن
 docker compose up -d --build
 docker compose run --rm api alembic revision --autogenerate -m "init"
 docker compose run --rm api alembic upgrade head
@@ -91,3 +92,5 @@ docker compose -f docker-compose.prober.yml up -d --build
 | `COMMISSION_PCT` | `0.15` | درصد کارمزد روی هر GB |
 | `MIN_TOPUP_USD` | `2` | حداقل اولین شارژ برای فعال‌سازی کانفیگ‌ها |
 | `TRAFFIC_POLL_INTERVAL_SEC` | `60` | فاصله سیکل بیلینگ |
+| `REQUIRED_CHANNEL` | `` | کانال جوین اجباری؛ `@username` یا آیدی عددی |
+| `REQUIRED_CHANNEL_POST_CHAT_ID` | `` | آیدی عددی `-100...` برای ارسال اعلان اوت‌باند جدید به کانال |

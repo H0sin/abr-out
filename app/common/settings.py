@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # Optional explicit join URL. If empty and required_channel starts with
     # "@", a t.me link is derived automatically.
     required_channel_url: str = Field(default="")
+    # Optional explicit target for posting marketplace announcements. Set this
+    # to the channel's numeric chat id (preferred for private channels). When
+    # empty, we fall back to ``required_channel``.
+    required_channel_post_chat_id: str = Field(default="")
     # Backup bot: a separate Telegram bot used only to deliver scheduled
     # database dumps to admin chats. Empty disables the backup job.
     backup_bot_token: str = Field(default="")
@@ -190,6 +194,21 @@ class Settings(BaseSettings):
         if ch.startswith("@") and len(ch) > 1:
             return f"https://t.me/{ch[1:]}"
         return ""
+
+    @property
+    def required_channel_post_chat(self) -> int | str | None:
+        """Best-effort chat target for channel announcements.
+
+        Prefers the dedicated numeric env var, then falls back to the required
+        join channel. Public channels may work with ``@username``; private
+        channels generally need the numeric ``-100...`` id.
+        """
+        raw = self.required_channel_post_chat_id.strip() or self.required_channel.strip()
+        if not raw:
+            return None
+        if raw.lstrip("-").isdigit():
+            return int(raw)
+        return raw
 
 
 @lru_cache

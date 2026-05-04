@@ -18,6 +18,7 @@ from app.bot.keyboards import (
     admin_user_panel,
     hide_reply_keyboard,
     join_channel_kb,
+    listing_buy_inline,
     main_menu_inline,
     support_reply_kb,
     wallet_hub_inline,
@@ -132,6 +133,15 @@ async def cmd_start(
             f"💵 مبلغ دلاری که می‌خواهید به کیف پول اضافه شود را وارد کنید:\n"
             f"(حداقل: <b>{settings.min_topup_usd}$</b>)\n\n"
             f"مثال: <code>5</code> یا <code>10.50</code>",
+        )
+    elif payload.startswith("buy_") and payload[4:].isdigit():
+        listing_id = int(payload[4:])
+        await message.answer(
+            (
+                f"🛒 برای خرید اوت‌باند <code>#{listing_id}</code> دکمه زیر را بزن.\n"
+                "صفحه خرید مستقیم روی همان اوت‌باند باز می‌شود."
+            ),
+            reply_markup=listing_buy_inline(listing_id),
         )
     else:
         await message.answer(

@@ -33,7 +33,7 @@ async def _post(method: str, payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def send_message(
-    chat_id: int,
+    chat_id: int | str,
     text: str,
     *,
     reply_markup: dict[str, Any] | None = None,

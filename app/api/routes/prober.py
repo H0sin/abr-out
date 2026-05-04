@@ -108,7 +108,7 @@ async def post_samples(samples: list[PingSampleIn]) -> Response:
             # تقسیم پینگ بر ۲.۵ قبل از ذخیره
             rtt_ms = None
             if s.rtt_ms is not None:
-                rtt_ms = int(round(s.rtt_ms / 1.7))
+                rtt_ms = int(round(s.rtt_ms / 1.3))
             rows.append(
                 PingSample(
                     listing_id=s.listing_id,

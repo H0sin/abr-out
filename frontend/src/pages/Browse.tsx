@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
 import { ApiError, Config, Listing, api, topupDeepLink } from "../api";
 import {
@@ -44,6 +44,7 @@ export function Browse() {
   const toast = useToast();
   const { refresh: refreshMe } = useMe();
   const nav = useNavigate();
+  const location = useLocation();
 
   const sorted = useMemo(() => {
     if (!listings) return null;
@@ -59,6 +60,25 @@ export function Browse() {
     });
     return xs;
   }, [listings, sort]);
+
+  useEffect(() => {
+    if (!sorted || openListing) return;
+    const raw = new URLSearchParams(location.search).get("listing");
+    if (!raw) return;
+    const listingId = Number.parseInt(raw, 10);
+    if (!Number.isFinite(listingId)) return;
+    const match = sorted.find((item) => item.id === listingId);
+    if (match) {
+      setOpenListing(match);
+    }
+  }, [location.search, openListing, sorted]);
+
+  function closeBuyModal() {
+    setOpenListing(null);
+    if (new URLSearchParams(location.search).has("listing")) {
+      nav("/browse", { replace: true });
+    }
+  }
 
   return (
     <div>
@@ -159,7 +179,7 @@ export function Browse() {
 
       <BuyModal
         listing={openListing}
-        onClose={() => setOpenListing(null)}
+        onClose={closeBuyModal}
         onCreated={() => {
           refreshMe();
         }}

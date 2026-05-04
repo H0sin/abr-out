@@ -106,6 +106,27 @@ def wallet_hub_inline() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def listing_buy_inline(listing_id: int) -> InlineKeyboardMarkup:
+    """WebApp button that opens Browse and preselects one listing."""
+    url = _miniapp_url(f"/browse?listing={listing_id}")
+    root_url = _miniapp_url()
+    rows: list[list[InlineKeyboardButton]] = []
+    if url:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"🛒 خرید اوت‌باند #{listing_id}",
+                    web_app=WebAppInfo(url=url),
+                )
+            ]
+        )
+    if root_url:
+        rows.append(
+            [InlineKeyboardButton(text=BTN_OPEN_APP, web_app=WebAppInfo(url=root_url))]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def hide_reply_keyboard() -> ReplyKeyboardRemove:
     """Send once on /start to clear any legacy persistent reply keyboard."""
     return ReplyKeyboardRemove()
