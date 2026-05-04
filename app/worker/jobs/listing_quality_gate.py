@@ -40,6 +40,7 @@ from sqlalchemy import exists, select, update
 from app.common.db.models import Listing, ListingStatus, PingSample
 from app.common.db.session import SessionLocal
 from app.common.logging import logger
+from app.common.notifications import notify_listing_buyers, notify_users
 from app.common.settings import get_settings
 
 
@@ -53,13 +54,14 @@ async def listing_quality_gate_once() -> None:
     # ``broken`` so the listing returns to the marketplace immediately.
     recovery_n = 1
     async with SessionLocal() as session:
+        pending_failed: list[tuple[int, int]] = []
         rows = (
             await session.execute(
                 select(Listing).where(Listing.status == ListingStatus.pending)
             )
         ).scalars().all()
         if rows:
-            await _pending_pass(session, rows, now)
+            pending_failed = await _pending_pass(session, rows, now)
 
         # 2) Demote pass: active -> broken.
         active_rows = (
@@ -67,7 +69,7 @@ async def listing_quality_gate_once() -> None:
                 select(Listing).where(Listing.status == ListingStatus.active)
             )
         ).scalars().all()
-        demoted: list[int] = []
+        demoted: list[tuple[int, int]] = []
         for listing in active_rows:
             last_ok = listing.last_ok_ping_at
             if last_ok is not None and last_ok >= demote_cutoff:
@@ -94,7 +96,7 @@ async def listing_quality_gate_once() -> None:
                     recovered_at=None,
                 )
             )
-            demoted.append(listing.id)
+            demoted.append((listing.id, listing.seller_user_id))
 
         # 3) Recover pass: broken -> active after first ok=true sample
         # since broken_since.
@@ -133,17 +135,47 @@ async def listing_quality_gate_once() -> None:
             recovered.append(listing.id)
 
         await session.commit()
+
+        # Notifications are best-effort and should not affect listing state.
+        broken_transitions = pending_failed + demoted
+        for listing_id, seller_user_id in broken_transitions:
+            await notify_users(
+                [seller_user_id],
+                (
+                    f"⚠️ اوت‌باند #{listing_id} بروکن شد و موقتاً از فروش خارج شد.\n"
+                    "اتصال سرور/تونل را بررسی و رفع کنید."
+                ),
+            )
+            await notify_listing_buyers(
+                session,
+                listing_id,
+                (
+                    f"⚠️ اتصال اوت‌باند #{listing_id} موقتاً قطع شده است.\n"
+                    "فعلاً از یک سرویس دیگر استفاده کنید تا این اوت‌باند پایدار شود."
+                ),
+            )
+
+        for listing_id in recovered:
+            await notify_listing_buyers(
+                session,
+                listing_id,
+                (
+                    f"✅ اتصال کانفیگ شما با اوت‌باند #{listing_id} دوباره برقرار شد.\n"
+                    "اکنون می‌توانید دوباره از آن استفاده کنید."
+                ),
+            )
+
         if demoted or recovered:
             logger.info(
                 "[health] demoted={} recovered={} (demoted_ids={} recovered_ids={})",
                 len(demoted),
                 len(recovered),
-                demoted,
+                [d[0] for d in demoted],
                 recovered,
             )
 
 
-async def _pending_pass(session, rows, now: datetime) -> None:
+async def _pending_pass(session, rows, now: datetime) -> list[tuple[int, int]]:
     """Pending lifecycle.
 
     - Promotes any pending listing that has at least one ``ok=true``
@@ -210,3 +242,9 @@ async def _pending_pass(session, rows, now: datetime) -> None:
             len(failed_ids),
             failed_ids,
         )
+    failed_set = set(failed_ids)
+    return [
+        (listing.id, listing.seller_user_id)
+        for listing in rows
+        if listing.id in failed_set
+    ]
