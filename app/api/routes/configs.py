@@ -33,7 +33,7 @@ MIN_BALANCE_FOR_NEW_CONFIG = Decimal("0.5")
 # Hard cap: a single buyer may have at most this many non-deleted
 # configs under one listing. Soft-deleted (DELETE) is the only state
 # that frees a slot.
-MAX_CONFIGS_PER_LISTING_PER_BUYER = 5
+MAX_CONFIGS_PER_LISTING_PER_BUYER = 20
 
 # ASCII-only config name: latin letters, digits, space, dash, underscore, dot.
 # Persian/Arabic and other non-ASCII are rejected so that the panel client

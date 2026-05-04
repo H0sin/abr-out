@@ -99,11 +99,18 @@ async def _evaluate_config(session, cfg: AutoWithdrawalConfig, now, settings, cl
             return
         # Cooldown: prevent threshold-mode auto-withdraws from firing back-
         # to-back (which would burn fees on tiny payouts the moment the
-        # balance crosses the threshold each cycle).
+        # balance crosses the threshold each cycle). Bypassed when the
+        # balance is at least 2× the threshold — at that point the user
+        # has clearly accumulated meaningful value, so making them wait
+        # out the cooldown looks like a bug from their side.
         cooldown = timedelta(
             minutes=int(settings.auto_withdraw_threshold_cooldown_min)
         )
-        if cfg.last_run_at is not None and (now - cfg.last_run_at) < cooldown:
+        if (
+            cfg.last_run_at is not None
+            and (now - cfg.last_run_at) < cooldown
+            and balance < cfg.threshold_usd * 2
+        ):
             return
 
     # Amount policy.
