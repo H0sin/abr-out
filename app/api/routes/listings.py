@@ -127,8 +127,11 @@ async def list_active(
     _: User = Depends(current_user),
 ) -> list[ListingOut]:
     """Browse active listings (the marketplace feed)."""
-    cutoff_24h = datetime.now(timezone.utc) - timedelta(hours=24)
-    min_stab = get_settings().marketplace_min_stability_pct
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    cutoff_24h = now - timedelta(hours=24)
+    min_stab = settings.marketplace_min_stability_pct
+    recovery_cutoff = now - timedelta(hours=settings.marketplace_recovery_grace_hours)
     async with SessionLocal() as session:
         result = await session.execute(
             select(Listing, User)
@@ -138,6 +141,7 @@ async def list_active(
                 or_(
                     Listing.stability_pct.is_(None),
                     Listing.stability_pct >= min_stab,
+                    Listing.recovered_at >= recovery_cutoff,
                 ),
             )
             .order_by(Listing.price_per_gb_usd.asc())

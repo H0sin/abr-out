@@ -28,7 +28,8 @@ This job runs every 30s and performs three passes:
 
 3. **Recover pass.** ``broken`` -> ``active`` on the first
     ``ok=true`` PingSample recorded after ``broken_since``. ``broken_since``
-    is cleared and the row reappears in the marketplace automatically.
+    is cleared, ``recovered_at`` is stamped, and the row reappears in the
+    marketplace automatically.
 """
 from __future__ import annotations
 
@@ -87,7 +88,11 @@ async def listing_quality_gate_once() -> None:
             await session.execute(
                 update(Listing)
                 .where(Listing.id == listing.id)
-                .values(status=ListingStatus.broken, broken_since=now)
+                .values(
+                    status=ListingStatus.broken,
+                    broken_since=now,
+                    recovered_at=None,
+                )
             )
             demoted.append(listing.id)
 
@@ -119,7 +124,11 @@ async def listing_quality_gate_once() -> None:
             await session.execute(
                 update(Listing)
                 .where(Listing.id == listing.id)
-                .values(status=ListingStatus.active, broken_since=None)
+                .values(
+                    status=ListingStatus.active,
+                    broken_since=None,
+                    recovered_at=now,
+                )
             )
             recovered.append(listing.id)
 

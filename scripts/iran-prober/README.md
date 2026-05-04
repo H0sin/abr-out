@@ -99,7 +99,8 @@ at a time on the host (so `XRAY_LOCAL_PORT` does not collide).
 
 - `aggregate_pings_once` (every 5 min) computes
   `avg_ping_ms` from the last 1h of `ok=true` samples and
-  `stability_pct` from the last 24h of all samples
+   `stability_pct` from the last marketplace stability window (12h by
+   default) of all samples
   (`ok_count * 100 / total`).
 - `listing_quality_gate_once` (every 30s) promotes a `pending`
   listing to `active` on the first `ok=true` sample, or moves it to
@@ -107,8 +108,11 @@ at a time on the host (so `XRAY_LOCAL_PORT` does not collide).
   without one. Broken listings keep their panel inbound + probe
   client; the seller sees a "connection failed" badge with a
   "retry test" button, and the prober continues to re-test broken
-  rows on a slower cadence so they recover automatically once the
-  Iran-side tunnel is healthy again.
+   rows on a slower cadence so they recover automatically once the
+   Iran-side tunnel is healthy again. After recovery, the marketplace
+   can temporarily bypass the minimum stability threshold for a
+   configurable grace window (24h by default), so recovered listings can
+   return to sales immediately.
 
 ## Required env
 

@@ -78,13 +78,20 @@ class Settings(BaseSettings):
     listing_broken_probe_minutes: int = 5
     listing_recovery_consecutive_ok: int = 1
 
-    # Minimum 24h stability (percent of ok=true ping samples) required for
-    # an ``active`` listing to be visible in the buyer marketplace. Listings
+    # Minimum stability (percent of ok=true ping samples) required for an
+    # ``active`` listing to be visible in the buyer marketplace. Listings
     # whose ``stability_pct`` is below this threshold are hidden from the
     # browse feed (but still visible to their seller and still re-probed).
     # ``None``/null stability (e.g. brand-new listings without enough
     # samples yet) is always shown.
     marketplace_min_stability_pct: int = 50
+    # Window size (in hours) used by ``aggregate_pings_once`` when computing
+    # ``stability_pct``.
+    marketplace_stability_window_hours: int = 12
+    # After a ``broken`` -> ``active`` recovery, Browse temporarily bypasses
+    # the stability threshold for this many hours so healed listings can be
+    # sold immediately.
+    marketplace_recovery_grace_hours: int = 24
 
     # Payments
     nowpayments_api_key: str = ""

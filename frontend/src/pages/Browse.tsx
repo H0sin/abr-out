@@ -17,11 +17,6 @@ import { haptic, openTelegramLink } from "../lib/useTelegram";
 
 type SortKey = "price" | "ping" | "sales" | "stability";
 
-// Listings dipping below this stability % are hidden from Browse so buyers
-// don't pick a flaky outbound. The check is dynamic: if a listing recovers
-// later, it reappears automatically on the next refetch.
-const MIN_STABILITY_PCT = 70;
-
 function fmtUsd(raw: string | number): string {
   const n = typeof raw === "number" ? raw : parseFloat(raw);
   if (!Number.isFinite(n)) return String(raw);
@@ -52,11 +47,7 @@ export function Browse() {
 
   const sorted = useMemo(() => {
     if (!listings) return null;
-    // Hide unstable outbounds. ``null`` means we have no samples yet — keep
-    // those visible so brand-new listings are not blocked from selling.
-    const xs = listings.filter(
-      (l) => l.stability_pct === null || l.stability_pct >= MIN_STABILITY_PCT,
-    );
+    const xs = [...listings];
     xs.sort((a, b) => {
       if (sort === "price")
         return parseFloat(a.price_per_gb_usd) - parseFloat(b.price_per_gb_usd);

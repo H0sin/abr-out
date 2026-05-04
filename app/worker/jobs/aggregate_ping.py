@@ -3,8 +3,9 @@
 
 - ``avg_ping_ms``: average rtt of ok=true samples in the last 1 hour (used
   on the Browse card as the "ping" badge).
-- ``stability_pct``: percentage of ok=true samples in the last 24 hours
-  (``ok_count * 100 / total``). ``None`` when no samples in the window.
+- ``stability_pct``: percentage of ok=true samples in the last configurable
+    marketplace window (``ok_count * 100 / total``). ``None`` when no samples
+    in the window.
 """
 from __future__ import annotations
 
@@ -16,12 +17,16 @@ from sqlalchemy.sql import func
 from app.common.db.models import Listing, PingSample
 from app.common.db.session import SessionLocal
 from app.common.logging import logger
+from app.common.settings import get_settings
 
 
 async def aggregate_pings_once() -> None:
+    settings = get_settings()
     now = datetime.now(timezone.utc)
     cutoff_1h = now - timedelta(hours=1)
-    cutoff_24h = now - timedelta(hours=24)
+    cutoff_stability = now - timedelta(
+        hours=settings.marketplace_stability_window_hours
+    )
 
     async with SessionLocal() as session:
         # 1h average rtt, ok-only.
@@ -40,7 +45,8 @@ async def aggregate_pings_once() -> None:
             for (lid, avg) in avg_rows
         }
 
-        # 24h stability percentage from ALL samples (ok and not-ok).
+        # Stability percentage from ALL samples (ok and not-ok) in the
+        # configured marketplace window.
         ok_int = case((PingSample.ok.is_(True), 1), else_=0)
         stab_rows = (
             await session.execute(
@@ -49,7 +55,7 @@ async def aggregate_pings_once() -> None:
                     func.count().label("total"),
                     func.sum(ok_int).label("ok_count"),
                 )
-                .where(PingSample.sampled_at >= cutoff_24h)
+                .where(PingSample.sampled_at >= cutoff_stability)
                 .group_by(PingSample.listing_id)
             )
         ).all()

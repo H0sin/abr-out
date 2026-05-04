@@ -183,8 +183,9 @@ class Listing(Base):
         Numeric(20, 8), default=Decimal("0"), nullable=False
     )
     avg_ping_ms: Mapped[int | None] = mapped_column(Integer)
-    # Stability % over the last 24h, computed by ``aggregate_pings_once`` from
-    # ``PingSample`` (ok_count * 100 / total). ``None`` when no samples yet.
+    # Stability % over the last configurable marketplace window, computed by
+    # ``aggregate_pings_once`` from ``PingSample`` (ok_count * 100 / total).
+    # ``None`` when no samples yet.
     stability_pct: Mapped[int | None] = mapped_column(Integer)
     # Probe client (added to the 3x-ui inbound at listing-creation time) used
     # by the Iran-side ``iran-prober`` script to build a real VLESS-TCP tunnel
@@ -212,6 +213,12 @@ class Listing(Base):
     # status. Used as the lower bound when counting consecutive ok samples
     # for recovery.
     broken_since: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Timestamp of the latest ``broken`` -> ``active`` recovery. Browse uses
+    # this to grant a short post-recovery grace period before stability-based
+    # filtering applies again.
+    recovered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     sales_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
