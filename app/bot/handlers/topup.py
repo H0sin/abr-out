@@ -103,6 +103,22 @@ async def on_topup_amount(message: Message, state: FSMContext) -> None:
         invoice_fn = create_invoice
         gateway_label = "NowPayments"
 
+    # Persist the PaymentIntent BEFORE calling the gateway. If the gateway
+    # call later times out we may still receive a valid IPN (the gateway
+    # could have created the invoice on its side) — having the intent in
+    # the DB lets the webhook reconcile it instead of dropping the payment.
+    async with SessionLocal() as session:
+        intent = PaymentIntent(
+            user_id=message.from_user.id,
+            gateway=gateway,
+            amount=amount_usd,
+            currency="USD",
+            status=PaymentStatus.pending,
+            external_ref=order_id,
+        )
+        session.add(intent)
+        await session.commit()
+
     try:
         payment = await invoice_fn(amount_usd, order_id, message.from_user.id)
     except Exception:
@@ -110,23 +126,14 @@ async def on_topup_amount(message: Message, state: FSMContext) -> None:
             "{} invoice creation failed for user {}",
             gateway_label, message.from_user.id,
         )
+        # Don't auto-fail the intent — the gateway may still send a valid
+        # IPN. Leave it pending; the webhook (or admin) can resolve it.
         await processing_msg.edit_text(
-            "❌ خطا در ساخت لینک پرداخت. لطفاً دوباره امتحان کنید.",
+            "❌ خطا در ساخت لینک پرداخت. لطفاً دوباره امتحان کنید.\n"
+            f"🔢 کد پیگیری: <code>{order_id}</code>",
         )
         await message.answer("بازگشت به منو:", reply_markup=main_menu_inline())
         return
-
-    async with SessionLocal() as session:
-        intent = PaymentIntent(
-            user_id=message.from_user.id,
-            gateway=gateway,
-            amount=payment["amount_usd"],
-            currency="USD",
-            status=PaymentStatus.pending,
-            external_ref=payment["order_id"],
-        )
-        session.add(intent)
-        await session.commit()
 
     kbd = InlineKeyboardMarkup(
         inline_keyboard=[

@@ -58,7 +58,7 @@ async def create_invoice(amount_usd: Decimal, order_id: str, user_id: int) -> di
         order_id, amount_usd, user_id,
     )
 
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=60) as client:
         r = await client.get(f"{PLISIO_BASE}/invoices/new", params=params)
         r.raise_for_status()
         result = r.json()
