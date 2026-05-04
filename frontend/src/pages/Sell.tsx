@@ -339,7 +339,15 @@ export function Sell() {
         <article key={l.id} className="card">
           <div className="row" style={{ alignItems: "flex-start" }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="title">{l.title}</div>
+              <div className="title">
+                {l.title}
+                <span
+                  className="num muted"
+                  style={{ marginInlineStart: 8, fontWeight: 400, fontSize: 13 }}
+                >
+                  #{l.id}
+                </span>
+              </div>
               <div
                 className="muted"
                 style={{ direction: "ltr", textAlign: "right", marginTop: 2 }}

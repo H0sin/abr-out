@@ -137,7 +137,6 @@ export type Listing = {
 export type Config = {
   id: number;
   listing_id: number;
-  listing_title: string;
   name: string;
   panel_client_email: string;
   vless_link: string;
@@ -146,6 +145,10 @@ export type Config = {
   expiry_at: string | null;
   total_gb_limit: number | null;
   auto_disable_on_price_increase: boolean;
+  // Buyer-facing per-GB price (commission-inclusive) of the underlying
+  // listing at the time of the request. Used by the "My configs" page to
+  // show which outbound the config belongs to and at what current price.
+  buyer_price_per_gb_usd: string;
 };
 
 export type BuyConfigInput = {

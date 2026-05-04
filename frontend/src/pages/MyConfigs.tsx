@@ -44,6 +44,15 @@ function expiryLabel(iso: string | null): string {
   return `${days} روز مانده`;
 }
 
+function fmtUsd(raw: string | number): string {
+  const n = typeof raw === "number" ? raw : parseFloat(raw);
+  if (!Number.isFinite(n)) return String(raw);
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4,
+  });
+}
+
 export function MyConfigs() {
   const { data: configs, loading, error, refetch } = useResource(
     () => api.listConfigs(),
@@ -103,7 +112,9 @@ export function MyConfigs() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="title">{c.name}</div>
               <div className="muted" style={{ marginTop: 2 }}>
-                {c.listing_title}
+                اوت‌باند <span className="num">#{c.listing_id}</span>
+                <span style={{ margin: "0 6px" }}>•</span>
+                گیگی <span className="num">{fmtUsd(c.buyer_price_per_gb_usd)}</span> دلار
               </div>
               <div
                 className="muted"

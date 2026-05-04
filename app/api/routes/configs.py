@@ -62,6 +62,10 @@ class ConfigOut(BaseModel):
     expiry_at: datetime | None = None
     total_gb_limit: float | None = None
     auto_disable_on_price_increase: bool = False
+    # Buyer-facing per-GB price (commission-inclusive). Surfaced so the
+    # "My configs" UI can show which listing each config belongs to and
+    # what the buyer is currently paying per GB.
+    buyer_price_per_gb_usd: Decimal = Decimal("0")
         # listing_title removed for privacy
 
 
@@ -78,7 +82,19 @@ class ConfigPatchIn(BaseModel):
     auto_disable_on_price_increase: bool | None = None
 
 
-def _to_out(c: Config, l: Listing, total_used_bytes: int = 0) -> ConfigOut:
+def _to_out(
+    c: Config,
+    l: Listing,
+    total_used_bytes: int = 0,
+    commission_mult: Decimal | None = None,
+) -> ConfigOut:
+    if commission_mult is None:
+        commission_mult = Decimal("1") + get_settings().commission_pct
+    from decimal import ROUND_HALF_UP
+
+    buyer_price = (l.price_per_gb_usd * commission_mult).quantize(
+        Decimal("0.0001"), rounding=ROUND_HALF_UP
+    )
     return ConfigOut(
         id=c.id,
         listing_id=c.listing_id,
@@ -92,6 +108,7 @@ def _to_out(c: Config, l: Listing, total_used_bytes: int = 0) -> ConfigOut:
             float(c.total_gb_limit) if c.total_gb_limit is not None else None
         ),
         auto_disable_on_price_increase=bool(c.auto_disable_on_price_increase),
+        buyer_price_per_gb_usd=buyer_price,
     )
         # listing_title removed for privacy
 
@@ -128,7 +145,10 @@ async def list_my_configs(
                 )
             ).all()
             totals = {cid: int(total) for cid, total in usage_rows}
-    return [_to_out(c, l, totals.get(c.id, 0)) for (c, l) in rows]
+    commission_mult = Decimal("1") + get_settings().commission_pct
+    return [
+        _to_out(c, l, totals.get(c.id, 0), commission_mult) for (c, l) in rows
+    ]
 
 
 @router.post("", response_model=ConfigOut, status_code=201)
