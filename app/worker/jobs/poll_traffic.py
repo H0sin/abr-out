@@ -240,7 +240,7 @@ async def _bill_inbound(
                 )
             )
             if buyer_debit > 0:
-                # توضیح فارسی با قیمت نهایی و درصد کارمزد
+                # توضیح: فقط شماره اوتباند (بدون هیچ اثری از فروشنده)
                 final_price = listing.price_per_gb_usd * (Decimal("1") + commission_pct)
                 commission_percent = int(commission_pct * 100)
                 session.add(
@@ -250,7 +250,7 @@ async def _bill_inbound(
                         type=TxnType.usage_debit,
                         ref=f"config:{cfg.id}",
                         note=(
-                            f"بابت اوت {listing.title} با قیمت {final_price:.2f} دلار "
+                            f"بابت اوت‌باند #{listing.id} با قیمت {final_price:.2f} دلار (قیمت فروشنده + کارمزد {commission_percent} درصد)"
                         ),
                         idempotency_key=f"poll:{cycle_id}:debit:{cfg.id}",
                     )

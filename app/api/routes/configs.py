@@ -54,7 +54,6 @@ def _sanitize_name(raw: str) -> str:
 class ConfigOut(BaseModel):
     id: int
     listing_id: int
-    listing_title: str
     name: str
     panel_client_email: str
     vless_link: str
@@ -63,6 +62,7 @@ class ConfigOut(BaseModel):
     expiry_at: datetime | None = None
     total_gb_limit: float | None = None
     auto_disable_on_price_increase: bool = False
+        # listing_title removed for privacy
 
 
 class ConfigCreateIn(BaseModel):
@@ -82,7 +82,6 @@ def _to_out(c: Config, l: Listing, total_used_bytes: int = 0) -> ConfigOut:
     return ConfigOut(
         id=c.id,
         listing_id=c.listing_id,
-        listing_title=l.title,
         name=c.name,
         panel_client_email=c.panel_client_email,
         vless_link=c.vless_link,
@@ -94,6 +93,7 @@ def _to_out(c: Config, l: Listing, total_used_bytes: int = 0) -> ConfigOut:
         ),
         auto_disable_on_price_increase=bool(c.auto_disable_on_price_increase),
     )
+        # listing_title removed for privacy
 
 
 @router.get("", response_model=list[ConfigOut])

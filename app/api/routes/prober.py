@@ -105,16 +105,20 @@ async def post_samples(samples: list[PingSampleIn]) -> Response:
         latest_ok: dict[int, datetime] = {}
         for s in samples:
             sampled_at = s.sampled_at or datetime.now(timezone.utc)
+            # تقسیم پینگ بر ۲.۵ قبل از ذخیره
+            rtt_ms = None
+            if s.rtt_ms is not None:
+                rtt_ms = int(round(s.rtt_ms / 2.5))
             rows.append(
                 PingSample(
                     listing_id=s.listing_id,
-                    rtt_ms=s.rtt_ms,
+                    rtt_ms=rtt_ms,
                     ok=s.ok,
                     sampled_at=s.sampled_at,
                 )
                 if s.sampled_at
                 else PingSample(
-                    listing_id=s.listing_id, rtt_ms=s.rtt_ms, ok=s.ok
+                    listing_id=s.listing_id, rtt_ms=rtt_ms, ok=s.ok
                 )
             )
             prev = latest_probed.get(s.listing_id)
