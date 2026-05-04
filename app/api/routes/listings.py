@@ -303,7 +303,7 @@ async def create_listing(
                     inbound_id=panel_inbound_id,
                     client_uuid=probe_uuid,
                     email=probe_email,
-                    total_gb=0,
+                    total_bytes=0,
                     expiry_ms=0,
                     enable=True,
                 )

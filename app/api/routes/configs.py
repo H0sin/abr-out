@@ -21,7 +21,7 @@ from app.common.db.models import (
 from app.common.db.session import SessionLocal
 from app.common.db.wallet import get_balance
 from app.common.logging import logger
-from app.common.panel.xui_client import XuiClient, XuiError
+from app.common.panel.xui_client import BYTES_PER_GB, XuiClient, XuiError
 from app.common.settings import get_settings
 
 router = APIRouter(prefix="/api/configs", tags=["configs"])
@@ -208,11 +208,16 @@ async def create_config(
             expiry_ms = int(expiry_at.timestamp() * 1000)
 
         total_gb_limit: Decimal | None = None
-        total_gb_xui = 0
+        total_bytes_xui = 0
         if body.total_gb_limit is not None:
             total_gb_limit = Decimal(str(body.total_gb_limit))
-            # XuiClient.add_client expects an int GB value.
-            total_gb_xui = max(1, int(round(body.total_gb_limit)))
+            # 3x-ui field name is totalGB but value unit is bytes.
+            total_bytes_xui = max(
+                1,
+                int(
+                    (total_gb_limit * Decimal(BYTES_PER_GB)).to_integral_value()
+                ),
+            )
 
         try:
             async with XuiClient() as xui:
@@ -220,7 +225,7 @@ async def create_config(
                     inbound_id=listing.panel_inbound_id,
                     client_uuid=client_uuid,
                     email=email,
-                    total_gb=total_gb_xui,
+                    total_bytes=total_bytes_xui,
                     expiry_ms=expiry_ms,
                     enable=True,
                 )

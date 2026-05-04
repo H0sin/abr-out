@@ -29,6 +29,9 @@ from loguru import logger
 from app.common.settings import get_settings
 
 
+BYTES_PER_GB = 1024**3
+
+
 class XuiError(RuntimeError):
     pass
 
@@ -228,7 +231,7 @@ class XuiClient:
         inbound_id: int,
         client_uuid: uuid.UUID,
         email: str,
-        total_gb: int = 0,  # 0 = unlimited
+        total_bytes: int = 0,  # 0 = unlimited
         expiry_ms: int = 0,  # 0 = never
         enable: bool = True,
     ) -> None:
@@ -236,7 +239,8 @@ class XuiClient:
             "id": str(client_uuid),
             "email": email,
             "limitIp": 0,
-            "totalGB": total_gb,
+            # 3x-ui expects this field in bytes despite the name.
+            "totalGB": max(0, int(total_bytes)),
             "expiryTime": expiry_ms,
             "enable": enable,
             "tgId": "",
