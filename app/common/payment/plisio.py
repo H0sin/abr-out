@@ -48,6 +48,11 @@ async def create_invoice(amount_usd: Decimal, order_id: str, user_id: int) -> di
         "order_name": f"Top-up {amount_usd}$ for user {user_id}",
         "callback_url": callback_url,
         "api_key": settings.plisio_secret_key,
+        # Pre-filling ``email`` skips the "Enter your e-mail" step on the
+        # hosted invoice page so the buyer goes straight to the payment
+        # screen. We don't have a real email for Telegram users, so synth
+        # a stable per-user one.
+        "email": f"user{user_id}@telegram.local",
     }
     if return_url:
         params["success_invoice_url"] = return_url
