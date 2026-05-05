@@ -54,6 +54,12 @@ async def create_invoice(amount_usd: Decimal, order_id: str, user_id: int) -> di
         # a stable per-user one.
         "email": f"user{user_id}@telegram.local",
     }
+    # Extend the hosted-invoice payment window beyond Plisio's 60-minute
+    # default. Many users top up from an exchange withdrawal, which can stall
+    # in KYC/manual review for hours; without this the invoice expires before
+    # funds arrive and we'd have to refund manually.
+    expire_min = max(1, min(2880, int(settings.invoice_expire_min)))
+    params["expire_min"] = str(expire_min)
     if return_url:
         params["success_invoice_url"] = return_url
         params["fail_invoice_url"] = return_url

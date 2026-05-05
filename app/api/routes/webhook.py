@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
@@ -22,11 +22,34 @@ from app.common.telegram_bot import send_message
 
 router = APIRouter(prefix="/webhook", tags=["webhook"])
 
+# Minimum USD amount that an underpayment must reach to be auto-credited.
+# Anything below this is treated as dust / failed conversion and the intent is
+# marked failed instead. Customers paying the exact invoice are unaffected;
+# this only gates the partial/underpaid recovery path.
+_PARTIAL_MIN_CREDIT_USD = Decimal("0.5")
+
+
+def _quantize_usd(value: Decimal) -> Decimal:
+    """Round a USD amount to 2 decimals (banker-safe HALF_UP)."""
+    return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _clamp_credit(usd: Decimal, invoice_amount: Decimal) -> Decimal:
+    """Never credit more than the invoice (guards against rate drift /
+    over-payment) and never less than zero."""
+    if usd < 0:
+        return Decimal("0")
+    if usd > invoice_amount:
+        return invoice_amount
+    return usd
+
 
 # NowPayments payment_status values:
 #   waiting, confirming, confirmed, sending  -> in-flight, no DB change
 #   finished                                 -> credit wallet
-#   partially_paid                           -> notify, do NOT auto-credit
+#   partially_paid                           -> auto-credit the actually-paid
+#                                               USD amount (computed from
+#                                               actually_paid / pay_amount)
 #   failed, refunded, expired                -> mark failed, notify
 _FINAL_SUCCESS = {"finished"}
 _FINAL_FAILURE = {"failed", "refunded", "expired"}
@@ -131,13 +154,72 @@ async def nowpayments_ipn(
         )
 
     elif payment_status in _PARTIAL:
-        # Keep intent pending; let admin resolve manually.
-        await send_message(
-            intent.user_id,
-            f"⚠️ پرداخت شما به‌صورت ناقص دریافت شد.\n"
-            f"لطفاً برای پیگیری با پشتیبانی تماس بگیرید.\n"
-            f"🔢 کد پیگیری: <code>{order_id}</code>",
+        # Compute USD-equivalent of what actually arrived. NowPayments doesn't
+        # echo a USD figure for partial payments, only crypto amounts, so we
+        # back-calculate via the invoice rate that was locked at create-time:
+        #     credited_usd = actually_paid / pay_amount * price_amount
+        actually_paid = payload.get("actually_paid")
+        pay_amount = payload.get("pay_amount")
+        invoice_usd = (
+            Decimal(str(price_amount)) if price_amount is not None else intent.amount
         )
+        credited: Decimal | None = None
+        try:
+            if actually_paid is not None and pay_amount is not None:
+                ap = Decimal(str(actually_paid))
+                pm = Decimal(str(pay_amount))
+                if pm > 0 and ap > 0:
+                    credited = _clamp_credit(
+                        _quantize_usd(ap / pm * invoice_usd), intent.amount
+                    )
+        except Exception as exc:
+            logger.warning(
+                "NowPayments IPN: failed to compute partial credit for order={}: {}",
+                order_id, exc,
+            )
+
+        if credited is None or credited < _PARTIAL_MIN_CREDIT_USD:
+            # Dust / no usable amount: treat as failure.
+            logger.warning(
+                "NowPayments IPN: partially_paid order={} dust (actually_paid={} "
+                "pay_amount={} computed_usd={}), marking failed",
+                order_id, actually_paid, pay_amount, credited,
+            )
+            intent.status = PaymentStatus.failed
+            await session.commit()
+            await send_message(
+                intent.user_id,
+                f"❌ پرداخت شما به‌صورت ناقص و کمتر از حداقل قابل تأیید دریافت شد.\n"
+                f"لطفاً برای پیگیری با پشتیبانی تماس بگیرید.\n"
+                f"🔢 کد پیگیری: <code>{order_id}</code>",
+            )
+        else:
+            logger.warning(
+                "NowPayments IPN: partially_paid order={} crediting {} USD of "
+                "invoiced {} USD (actually_paid={} pay_amount={})",
+                order_id, credited, intent.amount, actually_paid, pay_amount,
+            )
+            wallet_tx = WalletTransaction(
+                user_id=intent.user_id,
+                amount=credited,
+                currency=intent.currency or "USD",
+                type=TxnType.topup,
+                ref=order_id,
+                idempotency_key=f"nowpayments-{order_id}",
+            )
+            session.add(wallet_tx)
+            # Reflect the actually-received amount on the intent itself, so
+            # the payment record matches what the customer paid (e.g. 9.5
+            # instead of the originally-invoiced 10).
+            intent.amount = credited
+            intent.status = PaymentStatus.confirmed
+            await session.commit()
+            await send_message(
+                intent.user_id,
+                f"✅ موجودی شما <b>{credited}$</b> شارژ شد.\n"
+                f"⚠️ مبلغ فاکتور به مبلغ واریزی شما اصلاح شد.\n"
+                f"🔢 کد پیگیری: <code>{order_id}</code>",
+            )
 
     # else: in-flight states (waiting/confirming/confirmed/sending) → no-op.
 
@@ -147,12 +229,16 @@ async def nowpayments_ipn(
 # Plisio invoice callback statuses (per documentation):
 #   new, pending, pending internal       -> in-flight, no DB change
 #   completed                            -> credit wallet
-#   expired                              -> may be partially paid; treat as failed
-#                                          (admin can manually adjust if needed)
+#   expired                              -> docs: "look for the 'amount' field
+#                                          to verify payment. The full amount
+#                                          may not have been paid." Plisio has
+#                                          no dedicated underpaid status — it
+#                                          surfaces here as expired+amount>0.
 #   error, cancelled                     -> mark failed, notify
 #   cancelled duplicate                  -> no-op (a sibling invoice succeeded)
 _PLISIO_SUCCESS = {"completed"}
-_PLISIO_FAILURE = {"error", "cancelled", "expired"}
+_PLISIO_FAILURE = {"error", "cancelled"}
+_PLISIO_EXPIRED = {"expired"}
 _PLISIO_DUPLICATE = {"cancelled duplicate", "cancelled_duplicate"}
 
 
@@ -247,6 +333,85 @@ async def plisio_ipn(
             f"❌ پرداخت شما انجام نشد یا منقضی شد.\n"
             f"🔢 کد پیگیری: <code>{order_id}</code>",
         )
+
+    elif invoice_status in _PLISIO_EXPIRED:
+        # Underpaid invoices arrive here with a non-zero ``amount`` field
+        # (received crypto). True expiries have amount==0 / missing.
+        amount_crypto_raw = payload.get("amount")
+        source_rate_raw = payload.get("source_rate")
+        invoice_total_raw = payload.get("invoice_total_sum")
+
+        credited: Decimal | None = None
+        try:
+            amount_crypto = (
+                Decimal(str(amount_crypto_raw)) if amount_crypto_raw is not None else Decimal("0")
+            )
+            if amount_crypto > 0:
+                if source_rate_raw is not None:
+                    rate = Decimal(str(source_rate_raw))
+                    if rate > 0:
+                        credited = _clamp_credit(
+                            _quantize_usd(amount_crypto * rate), intent.amount
+                        )
+                # Fallback when source_rate is absent: derive ratio from the
+                # original invoice (source_amount corresponds to invoice_total_sum).
+                if credited is None and invoice_total_raw is not None and source_amount is not None:
+                    inv_total = Decimal(str(invoice_total_raw))
+                    src_total = Decimal(str(source_amount))
+                    if inv_total > 0 and src_total > 0:
+                        credited = _clamp_credit(
+                            _quantize_usd(src_total * amount_crypto / inv_total),
+                            intent.amount,
+                        )
+        except Exception as exc:
+            logger.warning(
+                "Plisio IPN: failed to compute partial credit for order={}: {}",
+                order_id, exc,
+            )
+
+        if credited is None or credited < _PARTIAL_MIN_CREDIT_USD:
+            # True expiry (no payment) or dust: mark failed.
+            logger.info(
+                "Plisio IPN: expired order={} (amount={} source_rate={} "
+                "invoice_total_sum={} computed_usd={}), marking failed",
+                order_id, amount_crypto_raw, source_rate_raw,
+                invoice_total_raw, credited,
+            )
+            intent.status = PaymentStatus.failed
+            await session.commit()
+            await send_message(
+                intent.user_id,
+                f"❌ پرداخت شما انجام نشد یا منقضی شد.\n"
+                f"🔢 کد پیگیری: <code>{order_id}</code>",
+            )
+        else:
+            logger.warning(
+                "Plisio IPN: underpaid expired order={} crediting {} USD of "
+                "invoiced {} USD (amount={} {} source_rate={})",
+                order_id, credited, intent.amount, amount_crypto_raw,
+                payload.get("currency"), source_rate_raw,
+            )
+            wallet_tx = WalletTransaction(
+                user_id=intent.user_id,
+                amount=credited,
+                currency=intent.currency or "USD",
+                type=TxnType.topup,
+                ref=order_id,
+                idempotency_key=f"plisio-{order_id}",
+            )
+            session.add(wallet_tx)
+            # Reflect the actually-received amount on the intent itself, so
+            # the payment record matches what the customer paid (e.g. 9.5
+            # instead of the originally-invoiced 10).
+            intent.amount = credited
+            intent.status = PaymentStatus.confirmed
+            await session.commit()
+            await send_message(
+                intent.user_id,
+                f"✅ موجودی شما <b>{credited}$</b> شارژ شد.\n"
+                f"⚠️ مبلغ فاکتور به مبلغ واریزی شما اصلاح شد.\n"
+                f"🔢 کد پیگیری: <code>{order_id}</code>",
+            )
 
     elif invoice_status in _PLISIO_DUPLICATE:
         # The user switched cryptocurrencies; a sibling invoice will (or did)

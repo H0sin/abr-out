@@ -106,6 +106,11 @@ class Settings(BaseSettings):
     # Top-ups strictly below this USD amount are routed to Plisio (when
     # configured); >= this amount are routed to NowPayments.
     plisio_threshold_usd: Decimal = Decimal("10")
+    # How long a hosted invoice stays payable, in minutes. Bumped well above
+    # the gateways' defaults (Plisio = 60m) so customers paying out of an
+    # exchange — where withdrawals can stall for KYC/manual review — still
+    # land on a live invoice. Plisio caps this at 2880 (48h).
+    invoice_expire_min: int = 720
 
     # --- USDT-BSC withdrawals ---
     # Public BSC RPC (mainnet by default; switch to testnet for staging).

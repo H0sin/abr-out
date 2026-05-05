@@ -167,11 +167,11 @@ function describeTx(t: Transaction): string | null {
     }
     if (t.type === "usage_debit") {
       const m = t.note.match(
-        /usage\s+(\d+)B\s*@\s*([\d.]+)\/GB\s*\+([\d.]+)/i,
+        /usage\s+(\d+)B\s*@\s*([\d.]+)\/GB/i,
       );
       if (m) {
         const bytes = parseInt(m[1], 10);
-        return `${formatBytes(bytes)} مصرف کانفیگ با نرخ $${formatPriceFa(m[2])} به ازای هر گیگ (+${formatPctFa(m[3])}٪ کارمزد)`;
+        return `${formatBytes(bytes)} مصرف کانفیگ با نرخ $${formatPriceFa(m[2])} به ازای هر گیگ`;
       }
     }
     return t.note;
