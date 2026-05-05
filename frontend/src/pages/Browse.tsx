@@ -67,7 +67,9 @@ export function Browse() {
         return (a.avg_ping_ms ?? 9999) - (b.avg_ping_ms ?? 9999);
       if (sort === "stability")
         return (b.stability_pct ?? -1) - (a.stability_pct ?? -1);
-      return b.sales_count - a.sales_count;
+      // "پرفروش‌ترین" ranks by total volume sold (GB), not by the number of
+      // individual sales — that's what the user perceives as "most sold".
+      return b.total_gb_sold - a.total_gb_sold;
     });
     return xs;
   }, [listings, sort]);
